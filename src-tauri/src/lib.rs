@@ -135,21 +135,16 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());
 
-    // Start the REST API server if HANDY_API_PORT is set
-    if let Ok(port_str) = std::env::var("HANDY_API_PORT") {
-        if let Ok(port) = port_str.parse::<u16>() {
-            api::start_api_server(
-                transcription_manager.clone(),
-                model_manager.clone(),
-                port,
-            );
-        } else {
-            log::warn!(
-                "Invalid HANDY_API_PORT value '{}', API server not started",
-                port_str
-            );
-        }
-    }
+    // Start the REST API server (default port 8720, override with HANDY_API_PORT)
+    let port: u16 = std::env::var("HANDY_API_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8720);
+    api::start_api_server(
+        transcription_manager.clone(),
+        model_manager.clone(),
+        port,
+    );
 
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command

@@ -102,6 +102,9 @@ tauri-nspanel = { git = "https://github.com/ahkohd/tauri-nspanel", branch = "v2.
 gtk-layer-shell = { version = "0.8", features = ["v0_6"] }
 gtk = "0.18"
 
+[patch.crates-io]
+transcribe-rs = { path = "../transcribe-rs-local" }
+
 [profile.release]
 lto = true
 codegen-units = 1
