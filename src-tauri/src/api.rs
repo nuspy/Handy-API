@@ -9,6 +9,8 @@ use log::{debug, error, info, warn};
 use serde::Serialize;
 use std::io::Write;
 use std::process::{Command, Stdio};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::sync::Arc;
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::DecoderOptions;
@@ -263,42 +265,50 @@ fn decode_audio(bytes: &[u8]) -> Result<Vec<f32>, String> {
 /// This handles formats that symphonia doesn't support (e.g., OGG Opus from Telegram).
 /// Outputs mono f32 samples at 16kHz.
 fn decode_with_ffmpeg(bytes: &[u8]) -> Result<Vec<f32>, String> {
-    let mut child = Command::new("ffmpeg")
-        .args([
-            "-i",
-            "pipe:0",
-            "-f",
-            "f32le",
-            "-ar",
-            &WHISPER_SAMPLE_RATE.to_string(),
-            "-ac",
-            "1",
-            "-loglevel",
-            "error",
-            "pipe:1",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| {
-            format!(
-                "ffmpeg not found or failed to start: {}. Install ffmpeg for OGG/Opus support.",
-                e
-            )
-        })?;
+    let mut cmd = Command::new("ffmpeg");
+    cmd.args([
+        "-i",
+        "pipe:0",
+        "-f",
+        "f32le",
+        "-ar",
+        &WHISPER_SAMPLE_RATE.to_string(),
+        "-ac",
+        "1",
+        "-loglevel",
+        "error",
+        "pipe:1",
+    ])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped());
 
-    // Write input bytes to ffmpeg's stdin
-    if let Some(mut stdin) = child.stdin.take() {
-        stdin
-            .write_all(bytes)
-            .map_err(|e| format!("Failed to write to ffmpeg stdin: {}", e))?;
-        // stdin is dropped here, closing the pipe
-    }
+    // Hide console window on Windows
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let mut child = cmd.spawn().map_err(|e| {
+        format!(
+            "ffmpeg not found or failed to start: {}. Install ffmpeg for OGG/Opus support.",
+            e
+        )
+    })?;
+
+    // Write stdin in a separate thread to avoid deadlock with large files
+    let stdin = child.stdin.take();
+    let input_bytes = bytes.to_vec();
+    let stdin_thread = std::thread::spawn(move || {
+        if let Some(mut stdin) = stdin {
+            let _ = stdin.write_all(&input_bytes);
+            // stdin is dropped here, closing the pipe
+        }
+    });
 
     let output = child
         .wait_with_output()
         .map_err(|e| format!("Failed to wait for ffmpeg: {}", e))?;
+
+    let _ = stdin_thread.join();
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -359,7 +369,7 @@ fn resample(samples: &[f32], from_hz: usize, to_hz: usize) -> Result<Vec<f32>, S
 }
 
 /// Start the REST API server on the given port.
-/// The server binds to 127.0.0.1 only (localhost).
+/// The server binds to 0.0.0.0 (all interfaces).
 pub fn start_api_server(
     transcription_manager: Arc<TranscriptionManager>,
     model_manager: Arc<ModelManager>,
@@ -376,7 +386,7 @@ pub fn start_api_server(
         .with_state(state);
 
     tauri::async_runtime::spawn(async move {
-        let addr = format!("127.0.0.1:{}", port);
+        let addr = format!("0.0.0.0:{}", port);
         match tokio::net::TcpListener::bind(&addr).await {
             Ok(listener) => {
                 info!("Transcription API server listening on http://{}", addr);
