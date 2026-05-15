@@ -1,0 +1,2 @@
+        let _: u64 = std::fs::copy("src/bindings.rs", out.join("bindings.rs"))
+            .expect("Failed to copy bindings.rs");

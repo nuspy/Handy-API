@@ -8,6 +8,7 @@ use axum::{
 use log::{debug, error, info, warn};
 use serde::Serialize;
 use std::io::Write;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
@@ -23,10 +24,15 @@ use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
 use crate::managers::model::ModelManager;
 use crate::managers::transcription::TranscriptionManager;
 
-struct ApiState {
-    transcription_manager: Arc<TranscriptionManager>,
+pub struct ApiState {
+    pub transcription_manager: Arc<TranscriptionManager>,
     #[allow(dead_code)]
-    model_manager: Arc<ModelManager>,
+    pub model_manager: Arc<ModelManager>,
+    /// Percorso del modello Silero VAD, usato dallo streaming STT (call_stream).
+    pub vad_model_path: PathBuf,
+    /// Lifecycle dei modelli STT/TTS in VRAM (vedi model_control).
+    /// Detiene anche i percorsi dell'helper/modelli Kokoro.
+    pub call_models: Arc<crate::model_control::CallModelManager>,
 }
 
 #[derive(Serialize)]
@@ -373,16 +379,53 @@ fn resample(samples: &[f32], from_hz: usize, to_hz: usize) -> Result<Vec<f32>, S
 pub fn start_api_server(
     transcription_manager: Arc<TranscriptionManager>,
     model_manager: Arc<ModelManager>,
+    vad_model_path: PathBuf,
+    tts_helper_path: PathBuf,
+    tts_model_dir: PathBuf,
     port: u16,
 ) {
+    // Lifecycle dei modelli in VRAM + auto-unload dopo 15 min di inattivita'.
+    // CallModelManager si fa carico dei percorsi helper/modelli Kokoro.
+    let call_models = Arc::new(crate::model_control::CallModelManager::new(
+        transcription_manager.clone(),
+        tts_helper_path,
+        tts_model_dir,
+    ));
+    crate::model_control::spawn_idle_unloader(call_models.clone());
+
     let state = Arc::new(ApiState {
         transcription_manager,
         model_manager,
+        vad_model_path,
+        call_models,
     });
 
     let app = Router::new()
         .route("/health", get(health))
         .route("/transcribe", post(transcribe))
+        // Streaming STT/TTS per la sessione di chiamata (vedi call_stream.rs).
+        .route(
+            "/stt/stream",
+            get(crate::call_stream::stt_websocket_handler),
+        )
+        .route(
+            "/tts/stream",
+            get(crate::call_stream::tts_websocket_handler),
+        )
+        // Canale di controllo: lifecycle dei modelli (vedi model_control.rs).
+        .route(
+            "/models/available",
+            get(crate::model_control::models_available),
+        )
+        .route("/models/load", post(crate::model_control::models_load))
+        .route(
+            "/models/unload",
+            post(crate::model_control::models_unload),
+        )
+        .route(
+            "/models/status",
+            get(crate::model_control::models_status),
+        )
         .with_state(state);
 
     tauri::async_runtime::spawn(async move {

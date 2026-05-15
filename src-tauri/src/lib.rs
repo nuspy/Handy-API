@@ -1,5 +1,8 @@
 mod actions;
 mod api;
+mod call_stream;
+mod model_control;
+mod tts;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod apple_intelligence;
 mod audio_feedback;
@@ -136,9 +139,36 @@ fn initialize_core_logic(app_handle: &AppHandle) {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(8720);
+    // Percorso del modello Silero VAD, necessario allo streaming STT.
+    let vad_model_path = app_handle
+        .path()
+        .resolve(
+            "resources/models/silero_vad_v4.onnx",
+            tauri::path::BaseDirectory::Resource,
+        )
+        .expect("Failed to resolve Silero VAD model path");
+    // Percorsi per lo streaming TTS Kokoro: helper Python (risorsa bundled)
+    // e cartella modelli. La cartella modelli e' la stessa usata dal
+    // ModelManager per i download via GUI (Settings -> Models), quindi le
+    // varianti Kokoro scaricate dall'UI saranno visibili all'helper.
+    let tts_helper_path = app_handle
+        .path()
+        .resolve(
+            "resources/kokoro_tts_helper.py",
+            tauri::path::BaseDirectory::Resource,
+        )
+        .expect("Failed to resolve Kokoro TTS helper path");
+    let tts_model_dir = app_handle
+        .path()
+        .app_data_dir()
+        .map(|d| d.join("models"))
+        .expect("Failed to resolve user models directory");
     api::start_api_server(
         transcription_manager.clone(),
         model_manager.clone(),
+        vad_model_path,
+        tts_helper_path,
+        tts_model_dir,
         port,
     );
 

@@ -244,7 +244,7 @@ impl TranscriptionEngine for WhisperEngine {
         full_params.set_print_realtime(whisper_params.print_realtime);
         full_params.set_print_timestamps(whisper_params.print_timestamps);
         full_params.set_suppress_blank(whisper_params.suppress_blank);
-        full_params.set_suppress_non_speech_tokens(whisper_params.suppress_non_speech_tokens);
+        full_params.set_suppress_nst(whisper_params.suppress_non_speech_tokens);
         full_params.set_no_speech_thold(whisper_params.no_speech_thold);
 
         if let Some(ref prompt) = whisper_params.initial_prompt {

@@ -24,6 +24,9 @@ pub enum EngineType {
     MoonshineStreaming,
     SenseVoice,
     GigaAM,
+    /// Kokoro: motore TTS (non STT). Le risorse sono lo stesso meccanismo:
+    /// si scarica `kokoro-v1.0*.onnx` + il companion `voices-v1.0.bin`.
+    Kokoro,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -418,6 +421,106 @@ impl ModelManager {
                 supports_translation: false,
                 is_recommended: false,
                 supported_languages: gigaam_languages,
+                is_custom: false,
+            },
+        );
+
+        // ----------------------------------------------------------------
+        // Kokoro TTS — modelli e companion. Scaricando una variante, il
+        // companion `voices-v1.0.bin` viene tirato automaticamente (vedi
+        // download_model). Le lingue elencate sono quelle supportate dal
+        // modello Kokoro v1.0 (vedi `KOKORO_VOICES` in call_stream.rs).
+        // ----------------------------------------------------------------
+        let kokoro_languages: Vec<String> = vec![
+            "it", "en-us", "en-gb", "fr-fr", "es", "pt-br", "ja", "cmn", "hi",
+        ].into_iter().map(String::from).collect();
+        let kokoro_release = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0";
+
+        available_models.insert(
+            "kokoro-voices".to_string(),
+            ModelInfo {
+                id: "kokoro-voices".to_string(),
+                name: "Kokoro voices".to_string(),
+                description: "Stili vocali per il TTS Kokoro (26 voci, ~27 MB). Richiesto da ogni variante Kokoro — scaricato automaticamente.".to_string(),
+                filename: "voices-v1.0.bin".to_string(),
+                url: Some(format!("{}/voices-v1.0.bin", kokoro_release)),
+                size_mb: 27,
+                is_downloaded: false,
+                is_downloading: false,
+                partial_size: 0,
+                is_directory: false,
+                engine_type: EngineType::Kokoro,
+                accuracy_score: 0.0,
+                speed_score: 0.0,
+                supports_translation: false,
+                is_recommended: false,
+                supported_languages: kokoro_languages.clone(),
+                is_custom: false,
+            },
+        );
+        available_models.insert(
+            "kokoro-v1.0-int8".to_string(),
+            ModelInfo {
+                id: "kokoro-v1.0-int8".to_string(),
+                name: "Kokoro TTS (int8)".to_string(),
+                description: "Modello TTS Kokoro quantizzato a 8 bit. Veloce, qualita' buona.".to_string(),
+                filename: "kokoro-v1.0.int8.onnx".to_string(),
+                url: Some(format!("{}/kokoro-v1.0.int8.onnx", kokoro_release)),
+                size_mb: 88,
+                is_downloaded: false,
+                is_downloading: false,
+                partial_size: 0,
+                is_directory: false,
+                engine_type: EngineType::Kokoro,
+                accuracy_score: 0.85,
+                speed_score: 0.95,
+                supports_translation: false,
+                is_recommended: true,
+                supported_languages: kokoro_languages.clone(),
+                is_custom: false,
+            },
+        );
+        available_models.insert(
+            "kokoro-v1.0-fp16".to_string(),
+            ModelInfo {
+                id: "kokoro-v1.0-fp16".to_string(),
+                name: "Kokoro TTS (fp16)".to_string(),
+                description: "Modello TTS Kokoro a 16 bit. Buon compromesso qualita'/dimensione.".to_string(),
+                filename: "kokoro-v1.0.fp16.onnx".to_string(),
+                url: Some(format!("{}/kokoro-v1.0.fp16.onnx", kokoro_release)),
+                size_mb: 169,
+                is_downloaded: false,
+                is_downloading: false,
+                partial_size: 0,
+                is_directory: false,
+                engine_type: EngineType::Kokoro,
+                accuracy_score: 0.92,
+                speed_score: 0.85,
+                supports_translation: false,
+                is_recommended: false,
+                supported_languages: kokoro_languages.clone(),
+                is_custom: false,
+            },
+        );
+        available_models.insert(
+            "kokoro-v1.0".to_string(),
+            ModelInfo {
+                id: "kokoro-v1.0".to_string(),
+                name: "Kokoro TTS (f32 full)".to_string(),
+                description: "Modello TTS Kokoro a precisione piena (~310 MB). Qualita' massima.".to_string(),
+                filename: "kokoro-v1.0.onnx".to_string(),
+                url: Some(format!("{}/kokoro-v1.0.onnx", kokoro_release)),
+                size_mb: 310,
+                is_downloaded: false,
+                is_downloading: false,
+                partial_size: 0,
+                is_directory: false,
+                engine_type: EngineType::Kokoro,
+                accuracy_score: 1.0,
+                speed_score: 0.70,
+                supports_translation: false,
+                is_recommended: false,
+                supported_languages: kokoro_languages,
                 is_custom: false,
             },
         );
@@ -1043,6 +1146,19 @@ impl ModelManager {
             "Successfully downloaded model {} to {:?}",
             model_id, model_path
         );
+
+        // Companion: per ogni variante Kokoro scarica anche voices-v1.0.bin
+        // se non e' gia' presente. La voce e' indispensabile alla sintesi.
+        if matches!(model_info.engine_type, EngineType::Kokoro) && model_id != "kokoro-voices" {
+            let voices_path = self.models_dir.join("voices-v1.0.bin");
+            if !voices_path.exists() {
+                info!("Kokoro variant '{}' scaricata, recupero il companion voices-v1.0.bin", model_id);
+                // Box::pin per consentire l'auto-chiamata async senza ricorsione del Future.
+                if let Err(e) = Box::pin(self.download_model("kokoro-voices")).await {
+                    warn!("Auto-download voices-v1.0.bin fallito: {}", e);
+                }
+            }
+        }
 
         Ok(())
     }

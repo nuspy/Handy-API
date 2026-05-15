@@ -71,7 +71,7 @@ flate2 = "1.0"
 transcribe-rs = { version = "0.2.8", features = ["whisper", "parakeet", "moonshine", "sense_voice", "gigaam"] }
 handy-keys = "0.2.2"
 ferrous-opencc = "0.2.3"
-axum = { version = "0.7", features = ["multipart"] }
+axum = { version = "0.7", features = ["multipart", "ws"] }
 symphonia = { version = "0.5", features = ["mp3", "flac", "ogg", "wav", "pcm", "vorbis", "aac"] }
 clap = { version = "4", features = ["derive"] }
 specta = "=2.0.0-rc.22"
@@ -115,6 +115,6 @@ tempfile = "3"
 
 [profile.release]
 lto = true
-codegen-units = 1
+codegen-units = 2
 strip = true
 panic = "abort"

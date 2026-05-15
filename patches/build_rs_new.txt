@@ -1,0 +1,25 @@
+        // PATCHED_FOR_WINDOWS
+        let contents = std::fs::read_to_string("src/bindings.rs")
+            .expect("Failed to read src/bindings.rs");
+        let mut filtered = String::with_capacity(contents.len());
+        let mut skip = false;
+        for line in contents.lines() {
+            if line.starts_with("const _: () = {") {
+                skip = true;
+                continue;
+            }
+            if skip {
+                if line.starts_with("};") {
+                    skip = false;
+                }
+                continue;
+            }
+            if line.contains("clippy::unnecessary_operation") {
+                continue;
+            }
+            let line = line.replace("::std::os::raw::c_uint", "::std::os::raw::c_int");
+            filtered.push_str(&line);
+            filtered.push('\n');
+        }
+        std::fs::write(out.join("bindings.rs"), filtered)
+            .expect("Failed to write filtered bindings.rs");

@@ -18,7 +18,11 @@ const ModelDropdown: React.FC<ModelDropdownProps> = ({
   onModelSelect,
 }) => {
   const { t } = useTranslation();
-  const downloadedModels = models.filter((m) => m.is_downloaded);
+  // Esclude i modelli Kokoro: sono TTS, non STT. Restano gestiti dalla
+  // pagina Settings -> Models.
+  const downloadedModels = models.filter(
+    (m) => m.is_downloaded && m.engine_type !== "Kokoro"
+  );
 
   const handleModelClick = (modelId: string) => {
     onModelSelect(modelId);

@@ -1,0 +1,16 @@
+
+// Vulkan backend declarations (added for Windows build compatibility)
+unsafe extern "C" {
+    pub fn ggml_backend_vk_buffer_type(device: usize) -> ggml_backend_buffer_type_t;
+    pub fn ggml_backend_vk_get_device_count() -> ::std::os::raw::c_int;
+    pub fn ggml_backend_vk_get_device_description(
+        device: ::std::os::raw::c_int,
+        description: *mut ::std::os::raw::c_char,
+        description_size: usize,
+    );
+    pub fn ggml_backend_vk_get_device_memory(
+        device: ::std::os::raw::c_int,
+        free: *mut usize,
+        total: *mut usize,
+    );
+}

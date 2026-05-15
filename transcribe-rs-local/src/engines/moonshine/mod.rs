@@ -56,6 +56,8 @@
 pub mod cache;
 pub mod engine;
 pub mod model;
+pub mod streaming;
 mod tokenizer;
 
 pub use engine::{ModelVariant, MoonshineEngine, MoonshineInferenceParams, MoonshineModelParams};
+pub use streaming::{MoonshineStreamingEngine, StreamingModelParams};

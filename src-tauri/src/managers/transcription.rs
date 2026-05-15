@@ -366,6 +366,17 @@ impl TranscriptionManager {
                 })?;
                 LoadedEngine::GigaAM(engine)
             }
+            EngineType::Kokoro => {
+                // Kokoro e' un engine TTS, non STT: non e' caricabile dal
+                // TranscriptionManager. Il caricamento avviene dal
+                // CallModelManager (model_control.rs) tramite l'helper Python.
+                let error_msg = format!(
+                    "Il modello '{}' e' Kokoro (TTS) e non puo' essere caricato come STT. \
+                     Usa il canale TTS (POST /models/load con tts:true).",
+                    model_id
+                );
+                return Err(anyhow::anyhow!(error_msg));
+            }
         };
 
         // Update the current engine and model ID

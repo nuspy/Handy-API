@@ -19,10 +19,14 @@
 //! transcribe-rs = { version = "0.2", features = ["parakeet", "whisper"] }
 //! ```
 
+#[cfg(feature = "gigaam")]
+pub mod gigaam;
 #[cfg(feature = "moonshine")]
 pub mod moonshine;
 #[cfg(feature = "parakeet")]
 pub mod parakeet;
+#[cfg(feature = "sense_voice")]
+pub mod sense_voice;
 #[cfg(feature = "whisper")]
 pub mod whisper;
 #[cfg(feature = "whisperfile")]
