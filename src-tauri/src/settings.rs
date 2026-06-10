@@ -430,6 +430,14 @@ pub struct AppSettings {
     pub whisper_gpu_device: i32,
     #[serde(default)]
     pub extra_recording_buffer_ms: u64,
+    /// Modello TTS attivo (id, es. "kokoro-v1.0-int8" o "piper-it-paola").
+    /// Usato dal canale di controllo per scegliere quale engine/file caricare.
+    #[serde(default = "default_selected_tts_model")]
+    pub selected_tts_model: String,
+}
+
+fn default_selected_tts_model() -> String {
+    "kokoro-v1.0-int8".to_string()
 }
 
 fn default_model() -> String {
@@ -814,6 +822,7 @@ pub fn get_default_settings() -> AppSettings {
         ort_accelerator: OrtAcceleratorSetting::default(),
         whisper_gpu_device: default_whisper_gpu_device(),
         extra_recording_buffer_ms: 0,
+        selected_tts_model: default_selected_tts_model(),
     }
 }
 

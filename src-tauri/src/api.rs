@@ -377,6 +377,7 @@ fn resample(samples: &[f32], from_hz: usize, to_hz: usize) -> Result<Vec<f32>, S
 /// Start the REST API server on the given port.
 /// The server binds to 0.0.0.0 (all interfaces).
 pub fn start_api_server(
+    app_handle: tauri::AppHandle,
     transcription_manager: Arc<TranscriptionManager>,
     model_manager: Arc<ModelManager>,
     vad_model_path: PathBuf,
@@ -385,9 +386,11 @@ pub fn start_api_server(
     port: u16,
 ) {
     // Lifecycle dei modelli in VRAM + auto-unload dopo 15 min di inattivita'.
-    // CallModelManager si fa carico dei percorsi helper/modelli Kokoro.
+    // CallModelManager si fa carico dei percorsi helper/modelli TTS.
     let call_models = Arc::new(crate::model_control::CallModelManager::new(
         transcription_manager.clone(),
+        model_manager.clone(),
+        app_handle,
         tts_helper_path,
         tts_model_dir,
     ));

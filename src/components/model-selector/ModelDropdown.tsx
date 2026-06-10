@@ -18,10 +18,13 @@ const ModelDropdown: React.FC<ModelDropdownProps> = ({
   onModelSelect,
 }) => {
   const { t } = useTranslation();
-  // Esclude i modelli Kokoro: sono TTS, non STT. Restano gestiti dalla
-  // pagina Settings -> Models.
+  // Esclude i modelli TTS (Kokoro/Piper): sono TTS, non STT. Restano gestiti
+  // dalla pagina Settings -> Models.
   const downloadedModels = models.filter(
-    (m) => m.is_downloaded && m.engine_type !== "Kokoro"
+    (m) =>
+      m.is_downloaded &&
+      m.engine_type !== "Kokoro" &&
+      m.engine_type !== "Piper"
   );
 
   const handleModelClick = (modelId: string) => {

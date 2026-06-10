@@ -36,11 +36,17 @@ pub struct KokoroTts {
 impl KokoroTts {
     /// Avvia l'helper Python.
     ///
-    /// - `helper_path`: percorso di `kokoro_tts_helper.py`
-    /// - `model_dir`: cartella dei modelli Kokoro (passata come `KOKORO_MODEL_DIR`)
+    /// - `helper_path`: percorso dell'helper Python (Kokoro o Piper)
+    /// - `model_dir`: cartella dei modelli (passata come `KOKORO_MODEL_DIR`)
+    /// - `model_file`: nome file specifico del modello da caricare (passato come
+    ///   `HANDY_TTS_MODEL_FILE`); se `None` l'helper sceglie da solo.
     ///
     /// L'interprete e' `python`, sovrascrivibile con la env var `HANDY_PYTHON`.
-    pub fn start(helper_path: &Path, model_dir: Option<&Path>) -> Result<Self> {
+    pub fn start(
+        helper_path: &Path,
+        model_dir: Option<&Path>,
+        model_file: Option<&str>,
+    ) -> Result<Self> {
         let python = std::env::var("HANDY_PYTHON").unwrap_or_else(|_| "python".to_string());
 
         let mut cmd = Command::new(&python);
@@ -51,6 +57,9 @@ impl KokoroTts {
             .stderr(Stdio::inherit());
         if let Some(dir) = model_dir {
             cmd.env("KOKORO_MODEL_DIR", dir);
+        }
+        if let Some(file) = model_file {
+            cmd.env("HANDY_TTS_MODEL_FILE", file);
         }
         #[cfg(target_os = "windows")]
         cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW

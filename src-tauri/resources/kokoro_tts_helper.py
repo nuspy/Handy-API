@@ -49,10 +49,17 @@ def find_models() -> tuple[str, str]:
         os.path.join(here, "..", "models"),
         here,
     ]
+    # Variante specifica scelta dall'utente (Settings -> Models -> TTS).
+    forced = os.environ.get("HANDY_TTS_MODEL_FILE")
     for d in candidates:
         voices = os.path.join(d, "voices-v1.0.bin")
         if not os.path.isfile(voices):
             continue
+        # Se l'utente ha scelto una variante e c'e', usala.
+        if forced:
+            forced_path = os.path.join(d, forced)
+            if os.path.isfile(forced_path):
+                return forced_path, voices
         onnx_matches = sorted(glob.glob(os.path.join(d, "kokoro*.onnx")))
         if onnx_matches:
             return onnx_matches[0], voices

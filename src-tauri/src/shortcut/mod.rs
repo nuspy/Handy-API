@@ -534,6 +534,17 @@ pub fn change_selected_language_setting(app: AppHandle, language: String) -> Res
     Ok(())
 }
 
+/// Imposta il modello TTS attivo (Kokoro o Piper). Persistito nei settings e
+/// usato dal canale di controllo per scegliere quale engine/file caricare.
+#[tauri::command]
+#[specta::specta]
+pub fn change_selected_tts_model_setting(app: AppHandle, model_id: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.selected_tts_model = model_id;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn change_overlay_position_setting(app: AppHandle, position: String) -> Result<(), String> {

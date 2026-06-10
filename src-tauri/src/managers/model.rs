@@ -30,6 +30,9 @@ pub enum EngineType {
     /// Kokoro: motore TTS (non STT). Le risorse sono lo stesso meccanismo:
     /// si scarica `kokoro-v1.0*.onnx` + il companion `voices-v1.0.bin`.
     Kokoro,
+    /// Piper: motore TTS leggero ONNX (rhasspy). Ogni voce e' un `.onnx` +
+    /// il companion `.onnx.json`. Multi-lingua.
+    Piper,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -721,6 +724,49 @@ impl ModelManager {
             },
         );
 
+        // ----------------------------------------------------------------
+        // Piper TTS (rhasspy): voci ONNX leggere, multi-lingua. Ogni voce e'
+        // un file `.onnx` + companion `.onnx.json` (scaricato in automatico).
+        // ----------------------------------------------------------------
+        let piper_release = "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0";
+        // (id, nome, descrizione, path-relativo-HF, file, lang, size_mb, recommended)
+        let piper_voices: &[(&str, &str, &str, &str, &str, &str, u64, bool)] = &[
+            ("piper-it-paola", "Piper (Italiano, Paola)", "Voce italiana femminile, qualita' media.",
+             "it/it_IT/paola/medium/it_IT-paola-medium.onnx", "it_IT-paola-medium.onnx", "it", 63, true),
+            ("piper-it-riccardo", "Piper (Italiano, Riccardo)", "Voce italiana maschile, leggera.",
+             "it/it_IT/riccardo/x_low/it_IT-riccardo-x_low.onnx", "it_IT-riccardo-x_low.onnx", "it", 21, false),
+            ("piper-en-lessac", "Piper (English US, Lessac)", "English US female, medium quality.",
+             "en/en_US/lessac/medium/en_US-lessac-medium.onnx", "en_US-lessac-medium.onnx", "en-us", 63, false),
+            ("piper-en-amy", "Piper (English US, Amy)", "English US female, medium quality.",
+             "en/en_US/amy/medium/en_US-amy-medium.onnx", "en_US-amy-medium.onnx", "en-us", 63, false),
+        ];
+        for (id, name, desc, rel, file, lang, size_mb, recommended) in piper_voices.iter().copied() {
+            available_models.insert(
+                id.to_string(),
+                ModelInfo {
+                    id: id.to_string(),
+                    name: name.to_string(),
+                    description: desc.to_string(),
+                    filename: file.to_string(),
+                    url: Some(format!("{}/{}", piper_release, rel)),
+                    sha256: None,
+                    size_mb,
+                    is_downloaded: false,
+                    is_downloading: false,
+                    partial_size: 0,
+                    is_directory: false,
+                    engine_type: EngineType::Piper,
+                    accuracy_score: 0.8,
+                    speed_score: 0.97,
+                    supports_translation: false,
+                    is_recommended: recommended,
+                    supported_languages: vec![lang.to_string()],
+                    supports_language_selection: false,
+                    is_custom: false,
+                },
+            );
+        }
+
         // Auto-discover custom Whisper models (.bin files) in the models directory
         if let Err(e) = Self::discover_custom_whisper_models(&models_dir, &mut available_models) {
             warn!("Failed to discover custom models: {}", e);
@@ -1106,6 +1152,7 @@ impl ModelManager {
 
         let url = model_info
             .url
+            .clone()
             .ok_or_else(|| anyhow::anyhow!("No download URL for model"))?;
         let model_path = self.models_dir.join(&model_info.filename);
         let partial_path = self
@@ -1441,6 +1488,28 @@ impl ModelManager {
                 // Box::pin per consentire l'auto-chiamata async senza ricorsione del Future.
                 if let Err(e) = Box::pin(self.download_model("kokoro-voices")).await {
                     warn!("Auto-download voices-v1.0.bin fallito: {}", e);
+                }
+            }
+        }
+
+        // Companion Piper: ogni voce `.onnx` richiede il `.onnx.json` accanto.
+        if matches!(model_info.engine_type, EngineType::Piper) {
+            if let Some(onnx_url) = &model_info.url {
+                let json_url = format!("{}.json", onnx_url);
+                let json_path = self.models_dir.join(format!("{}.json", model_info.filename));
+                if !json_path.exists() {
+                    info!("Piper '{}' scaricata, recupero il config {}.json", model_id, model_info.filename);
+                    match reqwest::get(&json_url).await {
+                        Ok(resp) => match resp.bytes().await {
+                            Ok(bytes) => {
+                                if let Err(e) = std::fs::write(&json_path, &bytes) {
+                                    warn!("Scrittura config Piper fallita: {}", e);
+                                }
+                            }
+                            Err(e) => warn!("Download config Piper fallito (body): {}", e),
+                        },
+                        Err(e) => warn!("Download config Piper fallito: {}", e),
+                    }
                 }
             }
         }

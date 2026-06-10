@@ -19,6 +19,7 @@ use log::{error, info};
 use serde_json::{json, Value};
 
 use crate::api::ApiState;
+use crate::managers::model::{EngineType, ModelManager};
 use crate::managers::transcription::TranscriptionManager;
 use crate::tts::KokoroTts;
 
@@ -50,6 +51,9 @@ const IDLE_UNLOAD: Duration = Duration::from_secs(15 * 60);
 /// Gestisce il caricamento/scaricamento dei modelli STT e TTS in VRAM.
 pub struct CallModelManager {
     transcription: Arc<TranscriptionManager>,
+    model_manager: Arc<ModelManager>,
+    app_handle: tauri::AppHandle,
+    /// Helper Kokoro (le risorse Piper stanno nella stessa cartella).
     tts_helper_path: PathBuf,
     tts_model_dir: PathBuf,
     inner: Mutex<Inner>,
@@ -65,17 +69,42 @@ struct Inner {
 impl CallModelManager {
     pub fn new(
         transcription: Arc<TranscriptionManager>,
+        model_manager: Arc<ModelManager>,
+        app_handle: tauri::AppHandle,
         tts_helper_path: PathBuf,
         tts_model_dir: PathBuf,
     ) -> Self {
         Self {
             transcription,
+            model_manager,
+            app_handle,
             tts_helper_path,
             tts_model_dir,
             inner: Mutex::new(Inner {
                 tts: None,
                 last_used: Instant::now(),
             }),
+        }
+    }
+
+    /// Risolve il modello TTS attivo (dai settings) in (helper_path, model_file).
+    /// Kokoro e Piper condividono lo stesso protocollo helper: cambia solo lo
+    /// script e il file modello. Se il modello non e' noto, ritorna l'helper
+    /// Kokoro senza file specifico (l'helper sceglie da solo).
+    fn resolve_tts(&self) -> (PathBuf, Option<String>) {
+        let settings = crate::settings::get_settings(&self.app_handle);
+        let sel = settings.selected_tts_model;
+        match self.model_manager.get_model_info(&sel) {
+            Some(info) if matches!(info.engine_type, EngineType::Piper) => {
+                let piper_helper = self
+                    .tts_helper_path
+                    .parent()
+                    .map(|p| p.join("piper_tts_helper.py"))
+                    .unwrap_or_else(|| self.tts_helper_path.clone());
+                (piper_helper, Some(info.filename))
+            }
+            Some(info) => (self.tts_helper_path.clone(), Some(info.filename)),
+            None => (self.tts_helper_path.clone(), None),
         }
     }
 
@@ -103,13 +132,17 @@ impl CallModelManager {
             None => self.transcription.initiate_model_load(),
         }
 
-        // --- TTS (Kokoro) ---
+        // --- TTS (Kokoro o Piper, in base a settings.selected_tts_model) ---
         if load_tts {
+            let (helper, model_file) = self.resolve_tts();
             let mut inner = self.inner.lock().map_err(|_| "lock avvelenato".to_string())?;
             if inner.tts.is_none() {
-                let engine =
-                    KokoroTts::start(&self.tts_helper_path, Some(self.tts_model_dir.as_path()))
-                        .map_err(|e| format!("TTS load fallito: {e}"))?;
+                let engine = KokoroTts::start(
+                    &helper,
+                    Some(self.tts_model_dir.as_path()),
+                    model_file.as_deref(),
+                )
+                .map_err(|e| format!("TTS load fallito: {e}"))?;
                 inner.tts = Some(Arc::new(Mutex::new(engine)));
             }
             inner.last_used = Instant::now();
@@ -157,19 +190,25 @@ impl CallModelManager {
         })
     }
 
-    /// Controlla l'inattivita' e scarica i modelli se oltre la soglia.
+    /// Controlla l'inattivita' e scarica il TTS se oltre la soglia.
+    ///
+    /// NB: gestiamo SOLO il TTS (Kokoro), che e' di proprieta' esclusiva del
+    /// CallModelManager. Il modello STT ha il proprio idle-watcher dentro
+    /// `TranscriptionManager`, che aggiorna `last_activity` ad ogni trascrizione
+    /// (sia da chiamata che da dettatura desktop) e salta l'unload mentre si
+    /// registra. Se qui includessimo l'STT, scaricheremmo ogni 60s il modello
+    /// che la dettatura desktop ha appena caricato — `last_used` non viene mai
+    /// rinfrescato dalla dettatura (solo da /stt/stream e /tts/stream) — facendo
+    /// fallire la trascrizione con "Model is not loaded".
     fn check_idle(&self) {
         let expired = match self.inner.lock() {
-            Ok(inner) => {
-                let loaded = inner.tts.is_some() || self.transcription.is_model_loaded();
-                loaded && inner.last_used.elapsed() >= IDLE_UNLOAD
-            }
+            Ok(inner) => inner.tts.is_some() && inner.last_used.elapsed() >= IDLE_UNLOAD,
             Err(_) => false,
         };
         if expired {
-            info!("Modelli inattivi da oltre 15 minuti: scarico dalla VRAM");
-            if let Err(e) = self.unload("all") {
-                error!("Auto-unload fallito: {}", e);
+            info!("TTS inattivo da oltre 15 minuti: scarico dalla VRAM");
+            if let Err(e) = self.unload("tts") {
+                error!("Auto-unload TTS fallito: {}", e);
             }
         }
     }

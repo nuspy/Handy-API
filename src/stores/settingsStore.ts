@@ -155,6 +155,8 @@ const settingUpdaters: {
     commands.changeWhisperGpuDevice(value as number),
   extra_recording_buffer_ms: (value) =>
     commands.changeExtraRecordingBufferSetting(value as number),
+  selected_tts_model: (value) =>
+    commands.changeSelectedTtsModelSetting(value as string),
 };
 
 export const useSettingsStore = create<SettingsStore>()(

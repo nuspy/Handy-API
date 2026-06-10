@@ -5,6 +5,7 @@ import { ChevronDown, Globe } from "lucide-react";
 import type { ModelCardStatus } from "@/components/onboarding";
 import { ModelCard } from "@/components/onboarding";
 import { useModelStore } from "@/stores/modelStore";
+import { useSettingsStore } from "@/stores/settingsStore";
 import { LANGUAGES } from "@/lib/constants/languages.ts";
 import type { ModelInfo } from "@/bindings";
 
@@ -13,12 +14,23 @@ const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
   return model.supported_languages.includes(langCode);
 };
 
+// I motori TTS (Kokoro, Piper) sono gestiti nel tab "Text-to-Speech": il modello
+// attivo e' persistito in `selected_tts_model`, distinto dal current model STT.
+const isTtsEngine = (model: ModelInfo): boolean =>
+  model.engine_type === "Kokoro" || model.engine_type === "Piper";
+
+type ModelTab = "stt" | "tts";
+
 export const ModelsSettings: React.FC = () => {
   const { t } = useTranslation();
   const [switchingModelId, setSwitchingModelId] = useState<string | null>(null);
   const [languageFilter, setLanguageFilter] = useState("all");
   const [languageDropdownOpen, setLanguageDropdownOpen] = useState(false);
   const [languageSearch, setLanguageSearch] = useState("");
+  // Tab attivo: STT (Whisper/Parakeet/...) vs TTS (Kokoro).
+  // I modelli TTS non hanno un "current model" (presenza nei file = pronti),
+  // quindi cliccare una card Kokoro NON deve cambiare il currentModel STT.
+  const [activeTab, setActiveTab] = useState<ModelTab>("stt");
   const languageDropdownRef = useRef<HTMLDivElement>(null);
   const languageSearchInputRef = useRef<HTMLInputElement>(null);
   const {
@@ -35,6 +47,13 @@ export const ModelsSettings: React.FC = () => {
     selectModel,
     deleteModel,
   } = useModelStore();
+
+  // Modello TTS attivo (persistito): usato per evidenziare la card "active" nel
+  // tab TTS e aggiornato al click su una voce Kokoro/Piper.
+  const selectedTtsModel = useSettingsStore(
+    (s) => s.settings?.selected_tts_model ?? "",
+  );
+  const updateSetting = useSettingsStore((s) => s.updateSetting);
 
   // click outside handler for language dropdown
   useEffect(() => {
@@ -88,10 +107,15 @@ export const ModelsSettings: React.FC = () => {
     if (switchingModelId === modelId) {
       return "switching";
     }
+    const model = models.find((m: ModelInfo) => m.id === modelId);
+    // TTS (Kokoro/Piper): "active" se e' il modello TTS selezionato.
+    if (model && isTtsEngine(model)) {
+      if (!model.is_downloaded) return "downloadable";
+      return model.id === selectedTtsModel ? "active" : "available";
+    }
     if (modelId === currentModel) {
       return "active";
     }
-    const model = models.find((m: ModelInfo) => m.id === modelId);
     if (model?.is_downloaded) {
       return "available";
     }
@@ -109,6 +133,18 @@ export const ModelsSettings: React.FC = () => {
   };
 
   const handleModelSelect = async (modelId: string) => {
+    const model = models.find((m: ModelInfo) => m.id === modelId);
+    // TTS (Kokoro/Piper): seleziona il modello TTS attivo (setting dedicato),
+    // non il "current model" STT.
+    if (model && isTtsEngine(model)) {
+      setSwitchingModelId(modelId);
+      try {
+        await updateSetting("selected_tts_model", modelId);
+      } finally {
+        setSwitchingModelId(null);
+      }
+      return;
+    }
     setSwitchingModelId(modelId);
     try {
       await selectModel(modelId);
@@ -153,15 +189,19 @@ export const ModelsSettings: React.FC = () => {
     }
   };
 
-  // Filter models based on language filter
+  // Filter models by tab (STT vs TTS) AND by language.
+  // STT tab: tutti tranne i motori TTS. TTS tab: solo TTS (Kokoro/Piper).
   const filteredModels = useMemo(() => {
     return models.filter((model: ModelInfo) => {
+      const isTts = isTtsEngine(model);
+      if (activeTab === "tts" && !isTts) return false;
+      if (activeTab === "stt" && isTts) return false;
       if (languageFilter !== "all") {
         if (!modelSupportsLanguage(model, languageFilter)) return false;
       }
       return true;
     });
-  }, [models, languageFilter]);
+  }, [models, languageFilter, activeTab]);
 
   // Split filtered models into downloaded (including custom) and available sections
   const { downloadedModels, availableModels } = useMemo(() => {
@@ -215,6 +255,34 @@ export const ModelsSettings: React.FC = () => {
           {t("settings.models.description")}
         </p>
       </div>
+
+      {/* Tabs: STT (Whisper/Parakeet/...) vs TTS (Kokoro). Vedi handleModelSelect e
+          getModelStatus per la differente gestione del "current model". */}
+      <div className="flex gap-2 mb-4 border-b border-mid-gray/30">
+        <button
+          type="button"
+          onClick={() => setActiveTab("stt")}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            activeTab === "stt"
+              ? "border-logo-primary text-logo-primary"
+              : "border-transparent text-text/60 hover:text-text"
+          }`}
+        >
+          Speech-to-Text
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("tts")}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
+            activeTab === "tts"
+              ? "border-logo-primary text-logo-primary"
+              : "border-transparent text-text/60 hover:text-text"
+          }`}
+        >
+          Text-to-Speech
+        </button>
+      </div>
+
       {filteredModels.length > 0 ? (
         <div className="space-y-6">
           {/* Downloaded Models Section — header always visible so filter stays accessible */}

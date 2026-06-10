@@ -65,7 +65,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYxOEM2RjJFMTQxQjI0OTEKUldTUkpCc1VMbStNOFlzNXIvUHpIR0I0cS9OMk5ZMWxyME1aNitwUHBWREpzWjlIaHByeU1yejcK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDVGMDE2QTcyNUYyRjEyRTcKUldUbkVpOWZjbW9CWDRHaEs2WHdGTGk5WXVHQk5tWEZYMFJHdzVLS3QzeW4wL1dpU0k0U1UyaUwK",
       "endpoints": [
         "https://github.com/nuspy/Handy-API/releases/latest/download/latest.json"
       ]
