@@ -387,9 +387,20 @@ async fn handle_tts_socket(mut socket: WebSocket, state: Arc<ApiState>) {
 /// restituisce tutto. Ritorna `None` se non c'e' ancora una frase completa.
 fn take_sentence(buf: &mut String) -> Option<String> {
     loop {
-        let boundary = buf.char_indices().find_map(|(i, c)| {
-            matches!(c, '.' | '!' | '?' | '\n').then(|| i + c.len_utf8())
-        });
+        // `.`/`!`/`?` contano come confine solo a fine buffer o se seguiti da
+        // uno spazio: cosi' non si spezzano numeri ("3.14") o sigle a meta'.
+        // Le frasi a fine buffer si sintetizzano subito (latenza invariata).
+        let mut boundary = None;
+        let mut it = buf.char_indices().peekable();
+        while let Some((i, c)) = it.next() {
+            if matches!(c, '.' | '!' | '?' | '\n') {
+                let next = it.peek().map(|&(_, n)| n);
+                if c == '\n' || next.map_or(true, |n| n.is_whitespace()) {
+                    boundary = Some(i + c.len_utf8());
+                    break;
+                }
+            }
+        }
         let cut = match boundary {
             Some(b) => b,
             None if buf.chars().count() >= TTS_MAX_BUFFER_CHARS => buf.len(),

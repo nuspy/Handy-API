@@ -348,7 +348,13 @@ fn resample(samples: &[f32], from_hz: usize, to_hz: usize) -> Result<Vec<f32>, S
     let mut resampler = FftFixedIn::<f32>::new(from_hz, to_hz, chunk_size, 1, 1)
         .map_err(|e| format!("Failed to create resampler: {}", e))?;
 
-    let mut output = Vec::with_capacity(samples.len() * to_hz / from_hz + chunk_size);
+    // Il resampler FFT ha un ritardo interno (`output_delay` frame in uscita):
+    // l'output parte con `delay` frame di pre-ring e gli ultimi campioni
+    // restano nel filtro. Senza flush + trim si perde la coda dell'audio
+    // (l'ultima parola dell'enunciato) e tutto risulta traslato.
+    let delay = resampler.output_delay();
+    let expected = samples.len() * to_hz / from_hz;
+    let mut output = Vec::with_capacity(expected + delay + chunk_size);
 
     for chunk in samples.chunks(chunk_size) {
         let input = if chunk.len() < chunk_size {
@@ -370,6 +376,22 @@ fn resample(samples: &[f32], from_hz: usize, to_hz: usize) -> Result<Vec<f32>, S
             }
         }
     }
+
+    // Flush: spinge fuori i campioni trattenuti dal filtro con code di zeri.
+    let zeros = vec![0.0f32; chunk_size];
+    let mut guard = 0;
+    while output.len() < expected + delay && guard < 8 {
+        match resampler.process(&[&zeros], None) {
+            Ok(result) if !result.is_empty() => output.extend_from_slice(&result[0]),
+            _ => break,
+        }
+        guard += 1;
+    }
+
+    // Scarta il ritardo iniziale e taglia alla durata attesa.
+    let start = delay.min(output.len());
+    output.drain(..start);
+    output.truncate(expected);
 
     Ok(output)
 }

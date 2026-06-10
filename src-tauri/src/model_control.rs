@@ -60,8 +60,10 @@ pub struct CallModelManager {
 }
 
 struct Inner {
-    /// Engine TTS Kokoro caricato (`None` = non in VRAM).
+    /// Engine TTS caricato (`None` = non in VRAM).
     tts: Option<Arc<Mutex<KokoroTts>>>,
+    /// Id del modello TTS caricato (per ricaricare se l'utente lo cambia).
+    tts_model: Option<String>,
     /// Ultimo utilizzo (STT o TTS), per l'auto-unload.
     last_used: Instant,
 }
@@ -82,18 +84,24 @@ impl CallModelManager {
             tts_model_dir,
             inner: Mutex::new(Inner {
                 tts: None,
+                tts_model: None,
                 last_used: Instant::now(),
             }),
         }
     }
 
-    /// Risolve il modello TTS attivo (dai settings) in (helper_path, model_file).
-    /// Kokoro e Piper condividono lo stesso protocollo helper: cambia solo lo
-    /// script e il file modello. Se il modello non e' noto, ritorna l'helper
-    /// Kokoro senza file specifico (l'helper sceglie da solo).
-    fn resolve_tts(&self) -> (PathBuf, Option<String>) {
-        let settings = crate::settings::get_settings(&self.app_handle);
-        let sel = settings.selected_tts_model;
+    /// Id del modello TTS scelto nei settings (Settings -> Models -> TTS).
+    pub fn selected_tts_model(&self) -> String {
+        crate::settings::get_settings(&self.app_handle).selected_tts_model
+    }
+
+    /// Risolve il modello TTS attivo (dai settings) in
+    /// (helper_path, model_file, model_id). Kokoro e Piper condividono lo
+    /// stesso protocollo helper: cambia solo lo script e il file modello.
+    /// Se il modello non e' noto, ritorna l'helper Kokoro senza file
+    /// specifico (l'helper sceglie da solo).
+    fn resolve_tts(&self) -> (PathBuf, Option<String>, String) {
+        let sel = self.selected_tts_model();
         match self.model_manager.get_model_info(&sel) {
             Some(info) if matches!(info.engine_type, EngineType::Piper) => {
                 let piper_helper = self
@@ -101,10 +109,10 @@ impl CallModelManager {
                     .parent()
                     .map(|p| p.join("piper_tts_helper.py"))
                     .unwrap_or_else(|| self.tts_helper_path.clone());
-                (piper_helper, Some(info.filename))
+                (piper_helper, Some(info.filename), sel)
             }
-            Some(info) => (self.tts_helper_path.clone(), Some(info.filename)),
-            None => (self.tts_helper_path.clone(), None),
+            Some(info) => (self.tts_helper_path.clone(), Some(info.filename), sel),
+            None => (self.tts_helper_path.clone(), None, sel),
         }
     }
 
@@ -134,9 +142,22 @@ impl CallModelManager {
 
         // --- TTS (Kokoro o Piper, in base a settings.selected_tts_model) ---
         if load_tts {
-            let (helper, model_file) = self.resolve_tts();
+            let (helper, model_file, model_id) = self.resolve_tts();
             let mut inner = self.inner.lock().map_err(|_| "lock avvelenato".to_string())?;
-            if inner.tts.is_none() {
+            // Ricarica anche se gia' caricato MA con un modello diverso da
+            // quello ora selezionato nei settings (l'utente l'ha cambiato).
+            let needs_load = inner.tts.is_none()
+                || inner.tts_model.as_deref() != Some(model_id.as_str());
+            if needs_load {
+                if inner.tts.is_some() {
+                    info!(
+                        "TTS: modello cambiato ({} -> {}), ricarico l'engine",
+                        inner.tts_model.as_deref().unwrap_or("?"),
+                        model_id
+                    );
+                }
+                inner.tts = None; // drop del vecchio engine -> termina l'helper
+                inner.tts_model = None;
                 let engine = KokoroTts::start(
                     &helper,
                     Some(self.tts_model_dir.as_path()),
@@ -144,6 +165,7 @@ impl CallModelManager {
                 )
                 .map_err(|e| format!("TTS load fallito: {e}"))?;
                 inner.tts = Some(Arc::new(Mutex::new(engine)));
+                inner.tts_model = Some(model_id);
             }
             inner.last_used = Instant::now();
         }
@@ -160,12 +182,14 @@ impl CallModelManager {
             "tts" => {
                 if let Ok(mut inner) = self.inner.lock() {
                     inner.tts = None; // Drop di KokoroTts -> termina l'helper Python
+                    inner.tts_model = None;
                 }
             }
             "all" => {
                 let _ = self.transcription.unload_model();
                 if let Ok(mut inner) = self.inner.lock() {
                     inner.tts = None;
+                    inner.tts_model = None;
                 }
             }
             other => return Err(format!("componente sconosciuto: {other}")),
@@ -175,16 +199,24 @@ impl CallModelManager {
 
     /// Stato corrente: cosa e' caricato e da quanto e' inattivo.
     pub fn status(&self) -> Value {
-        let (tts_loaded, idle_secs) = match self.inner.lock() {
-            Ok(inner) => (inner.tts.is_some(), inner.last_used.elapsed().as_secs()),
-            Err(_) => (false, 0),
+        let (tts_loaded, tts_model, idle_secs) = match self.inner.lock() {
+            Ok(inner) => (
+                inner.tts.is_some(),
+                inner.tts_model.clone(),
+                inner.last_used.elapsed().as_secs(),
+            ),
+            Err(_) => (false, None, 0),
         };
         json!({
             "stt": {
                 "loaded": self.transcription.is_model_loaded(),
                 "current_model": self.transcription.get_current_model(),
             },
-            "tts": { "loaded": tts_loaded },
+            "tts": {
+                "loaded": tts_loaded,
+                "current_model": tts_model,
+                "selected_model": self.selected_tts_model(),
+            },
             "idle_seconds": idle_secs,
             "idle_unload_seconds": IDLE_UNLOAD.as_secs(),
         })
@@ -238,7 +270,12 @@ pub async fn models_available(State(state): State<Arc<ApiState>>) -> Json<Value>
         })
         .collect();
     Json(json!({
-        "tts": { "voices": voices },
+        "tts": {
+            "voices": voices,
+            // Le voci sopra valgono per Kokoro; con una voce Piper attiva il
+            // parametro "voice" del /tts/stream viene ignorato dall'helper.
+            "selected_model": state.call_models.selected_tts_model(),
+        },
         "stt": {
             "loaded": state.transcription_manager.is_model_loaded(),
             "current_model": state.transcription_manager.get_current_model(),
