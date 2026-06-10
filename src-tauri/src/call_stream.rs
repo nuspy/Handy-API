@@ -337,7 +337,7 @@ async fn handle_tts_socket(mut socket: WebSocket, state: Arc<ApiState>) {
                             // Sintetizza tutte le frasi gia' complete.
                             while let Some(sentence) = take_sentence(&mut text_buf) {
                                 synthesize_and_send(
-                                    &mut socket, &tts, &sentence, &voice, &lang, speed,
+                                    &mut socket, &state, &tts, &sentence, &voice, &lang, speed,
                                 )
                                 .await;
                             }
@@ -348,7 +348,7 @@ async fn handle_tts_socket(mut socket: WebSocket, state: Arc<ApiState>) {
                         let pending = pending.trim();
                         if !pending.is_empty() {
                             synthesize_and_send(
-                                &mut socket, &tts, pending, &voice, &lang, speed,
+                                &mut socket, &state, &tts, pending, &voice, &lang, speed,
                             )
                             .await;
                         }
@@ -358,7 +358,7 @@ async fn handle_tts_socket(mut socket: WebSocket, state: Arc<ApiState>) {
                         let pending = pending.trim();
                         if !pending.is_empty() {
                             synthesize_and_send(
-                                &mut socket, &tts, pending, &voice, &lang, speed,
+                                &mut socket, &state, &tts, pending, &voice, &lang, speed,
                             )
                             .await;
                         }
@@ -419,8 +419,13 @@ fn take_sentence(buf: &mut String) -> Option<String> {
 }
 
 /// Sintetizza una frase con Kokoro (operazione bloccante) e invia l'audio.
+///
+/// Su errore prova a "mietere" un eventuale engine morto (helper ucciso dal
+/// watchdog di `KokoroTts::synthesize` o crashato): il prossimo /models/load
+/// lo ricarichera' pulito.
 async fn synthesize_and_send(
     socket: &mut WebSocket,
+    state: &Arc<ApiState>,
     tts: &Arc<Mutex<KokoroTts>>,
     text: &str,
     voice: &str,
@@ -436,6 +441,10 @@ async fn synthesize_and_send(
         engine.synthesize(&text, &voice, &lang, speed)
     })
     .await;
+
+    if matches!(&result, Ok(Err(_)) | Err(_)) {
+        state.call_models.reap_dead_tts();
+    }
 
     match result {
         Ok(Ok(audio)) => {

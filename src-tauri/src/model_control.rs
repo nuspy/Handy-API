@@ -222,6 +222,24 @@ impl CallModelManager {
         })
     }
 
+    /// Se l'engine TTS e' MORTO (helper ucciso dal watchdog su timeout, o
+    /// crashato), lo scarta: cosi' il prossimo `/models/load` lo ricarica
+    /// pulito invece di restituire un engine inutilizzabile. Un mutex
+    /// avvelenato (panic durante una sintesi) vale come morto.
+    pub fn reap_dead_tts(&self) {
+        if let Ok(mut inner) = self.inner.lock() {
+            let dead = inner
+                .tts
+                .as_ref()
+                .map_or(false, |t| t.lock().map(|e| !e.is_alive()).unwrap_or(true));
+            if dead {
+                error!("TTS: helper morto, scarto l'engine (si ricarica al prossimo load)");
+                inner.tts = None;
+                inner.tts_model = None;
+            }
+        }
+    }
+
     /// Controlla l'inattivita' e scarica il TTS se oltre la soglia.
     ///
     /// NB: gestiamo SOLO il TTS (Kokoro), che e' di proprieta' esclusiva del
@@ -262,19 +280,50 @@ pub fn spawn_idle_unloader(manager: Arc<CallModelManager>) {
 // ============================================================================
 
 /// `GET /models/available` — voci/lingue TTS e stato del modello STT.
+///
+/// Le voci dipendono dall'engine del modello TTS selezionato:
+/// - Kokoro: le voci interne del modello (KOKORO_VOICES), selezionabili per
+///   richiesta col campo "voice" di /tts/stream;
+/// - Piper: la voce E' il modello — si elencano le voci Piper SCARICATE
+///   (voice = model id); per cambiarla si imposta selected_tts_model e si
+///   rifa' /models/load (l'engine viene ricaricato). Il campo "voice" di
+///   /tts/stream viene ignorato dall'helper Piper.
 pub async fn models_available(State(state): State<Arc<ApiState>>) -> Json<Value> {
-    let voices: Vec<Value> = KOKORO_VOICES
-        .iter()
-        .map(|(voice, lang, lang_name)| {
-            json!({"voice": voice, "lang": lang, "language": lang_name})
-        })
-        .collect();
+    let selected = state.call_models.selected_tts_model();
+    let is_piper = matches!(
+        state
+            .model_manager
+            .get_model_info(&selected)
+            .map(|i| i.engine_type),
+        Some(EngineType::Piper)
+    );
+    let voices: Vec<Value> = if is_piper {
+        state
+            .model_manager
+            .get_available_models()
+            .into_iter()
+            .filter(|m| matches!(m.engine_type, EngineType::Piper) && m.is_downloaded)
+            .map(|m| {
+                json!({
+                    "voice": m.id,
+                    "lang": m.supported_languages.first().cloned().unwrap_or_default(),
+                    "language": m.name,
+                })
+            })
+            .collect()
+    } else {
+        KOKORO_VOICES
+            .iter()
+            .map(|(voice, lang, lang_name)| {
+                json!({"voice": voice, "lang": lang, "language": lang_name})
+            })
+            .collect()
+    };
     Json(json!({
         "tts": {
+            "engine": if is_piper { "piper" } else { "kokoro" },
             "voices": voices,
-            // Le voci sopra valgono per Kokoro; con una voce Piper attiva il
-            // parametro "voice" del /tts/stream viene ignorato dall'helper.
-            "selected_model": state.call_models.selected_tts_model(),
+            "selected_model": selected,
         },
         "stt": {
             "loaded": state.transcription_manager.is_model_loaded(),
