@@ -17,7 +17,8 @@ const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
 // I motori TTS (Kokoro, Piper) sono gestiti nel tab "Text-to-Speech": il modello
 // attivo e' persistito in `selected_tts_model`, distinto dal current model STT.
 const isTtsEngine = (model: ModelInfo): boolean =>
-  model.engine_type === "Kokoro" || model.engine_type === "Piper";
+  model.engine_type === "Kokoro" || model.engine_type === "Piper" ||
+  model.engine_type === "Chatterbox";
 
 type ModelTab = "stt" | "tts";
 

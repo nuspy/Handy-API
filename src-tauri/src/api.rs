@@ -451,6 +451,8 @@ pub fn start_api_server(
             "/models/status",
             get(crate::model_control::models_status),
         )
+        // Voice cloning (engine Chatterbox): carica un campione voce.
+        .route("/voices/clone", post(crate::model_control::voices_clone))
         .with_state(state);
 
     tauri::async_runtime::spawn(async move {

@@ -56,18 +56,22 @@ impl Drop for CancelOnDrop {
 impl KokoroTts {
     /// Avvia l'helper Python.
     ///
-    /// - `helper_path`: percorso dell'helper Python (Kokoro o Piper)
+    /// - `helper_path`: percorso dell'helper Python (Kokoro, Piper o Chatterbox)
     /// - `model_dir`: cartella dei modelli (passata come `KOKORO_MODEL_DIR`)
     /// - `model_file`: nome file specifico del modello da caricare (passato come
     ///   `HANDY_TTS_MODEL_FILE`); se `None` l'helper sceglie da solo.
-    ///
-    /// L'interprete e' `python`, sovrascrivibile con la env var `HANDY_PYTHON`.
+    /// - `python_override`: interprete specifico per questo engine (es. il venv
+    ///   dedicato di Chatterbox); `None` = `HANDY_PYTHON` o `python` dal PATH.
     pub fn start(
         helper_path: &Path,
         model_dir: Option<&Path>,
         model_file: Option<&str>,
+        python_override: Option<&Path>,
     ) -> Result<Self> {
-        let python = std::env::var("HANDY_PYTHON").unwrap_or_else(|_| "python".to_string());
+        let python = python_override
+            .map(|p| p.to_string_lossy().into_owned())
+            .or_else(|| std::env::var("HANDY_PYTHON").ok())
+            .unwrap_or_else(|| "python".to_string());
 
         let mut cmd = Command::new(&python);
         cmd.arg(helper_path)

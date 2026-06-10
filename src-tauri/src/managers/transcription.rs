@@ -377,12 +377,12 @@ impl TranscriptionManager {
                 })?;
                 LoadedEngine::Cohere(engine)
             }
-            EngineType::Kokoro | EngineType::Piper => {
-                // Kokoro/Piper sono engine TTS, non STT: non caricabili dal
-                // TranscriptionManager. Il caricamento avviene dal
-                // CallModelManager (model_control.rs) tramite l'helper Python.
+            EngineType::Kokoro | EngineType::Piper | EngineType::Chatterbox => {
+                // Engine TTS, non STT: non caricabili dal TranscriptionManager.
+                // Il caricamento avviene dal CallModelManager (model_control.rs)
+                // tramite il rispettivo helper Python.
                 let error_msg = format!(
-                    "Il modello '{}' e' un TTS (Kokoro/Piper) e non puo' essere caricato come STT. \
+                    "Il modello '{}' e' un TTS e non puo' essere caricato come STT. \
                      Usa il canale TTS (POST /models/load con tts:true).",
                     model_id
                 );

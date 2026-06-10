@@ -95,24 +95,80 @@ impl CallModelManager {
         crate::settings::get_settings(&self.app_handle).selected_tts_model
     }
 
+    /// Percorso di un helper che vive accanto a quello Kokoro.
+    fn helper_sibling(&self, name: &str) -> PathBuf {
+        self.tts_helper_path
+            .parent()
+            .map(|p| p.join(name))
+            .unwrap_or_else(|| self.tts_helper_path.clone())
+    }
+
+    /// Python del venv dedicato a Chatterbox (creato con --system-site-packages
+    /// per riusare il torch CUDA di sistema, con le dipendenze pinnate di
+    /// chatterbox isolate). Override con HANDY_PYTHON_CHATTERBOX.
+    fn chatterbox_python(&self) -> Option<PathBuf> {
+        if let Ok(p) = std::env::var("HANDY_PYTHON_CHATTERBOX") {
+            return Some(PathBuf::from(p));
+        }
+        let venv = self
+            .tts_model_dir
+            .parent()?
+            .join("chatterbox-venv")
+            .join("Scripts")
+            .join("python.exe");
+        venv.is_file().then_some(venv)
+    }
+
+    /// Cartella dei campioni voce per il cloning (POST /voices/clone).
+    pub fn cloned_voices_dir(&self) -> PathBuf {
+        self.tts_model_dir.join("cloned_voices")
+    }
+
+    /// Elenco delle voci clonate disponibili (nomi senza estensione).
+    pub fn cloned_voices(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(self.cloned_voices_dir()) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_file()
+                    && matches!(
+                        p.extension().and_then(|x| x.to_str()),
+                        Some("wav") | Some("mp3") | Some("flac") | Some("ogg")
+                    )
+                {
+                    if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                        out.push(stem.to_string());
+                    }
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     /// Risolve il modello TTS attivo (dai settings) in
-    /// (helper_path, model_file, model_id). Kokoro e Piper condividono lo
-    /// stesso protocollo helper: cambia solo lo script e il file modello.
+    /// (helper_path, model_file, model_id, python_override). Gli helper
+    /// condividono lo stesso protocollo stdio: cambia lo script, l'eventuale
+    /// file modello e (per Chatterbox) l'interprete del venv dedicato.
     /// Se il modello non e' noto, ritorna l'helper Kokoro senza file
     /// specifico (l'helper sceglie da solo).
-    fn resolve_tts(&self) -> (PathBuf, Option<String>, String) {
+    fn resolve_tts(&self) -> (PathBuf, Option<String>, String, Option<PathBuf>) {
         let sel = self.selected_tts_model();
         match self.model_manager.get_model_info(&sel) {
-            Some(info) if matches!(info.engine_type, EngineType::Piper) => {
-                let piper_helper = self
-                    .tts_helper_path
-                    .parent()
-                    .map(|p| p.join("piper_tts_helper.py"))
-                    .unwrap_or_else(|| self.tts_helper_path.clone());
-                (piper_helper, Some(info.filename), sel)
-            }
-            Some(info) => (self.tts_helper_path.clone(), Some(info.filename), sel),
-            None => (self.tts_helper_path.clone(), None, sel),
+            Some(info) if matches!(info.engine_type, EngineType::Piper) => (
+                self.helper_sibling("piper_tts_helper.py"),
+                Some(info.filename),
+                sel,
+                None,
+            ),
+            Some(info) if matches!(info.engine_type, EngineType::Chatterbox) => (
+                self.helper_sibling("chatterbox_tts_helper.py"),
+                None, // i pesi li gestisce l'helper (cache HuggingFace)
+                sel,
+                self.chatterbox_python(),
+            ),
+            Some(info) => (self.tts_helper_path.clone(), Some(info.filename), sel, None),
+            None => (self.tts_helper_path.clone(), None, sel, None),
         }
     }
 
@@ -140,9 +196,9 @@ impl CallModelManager {
             None => self.transcription.initiate_model_load(),
         }
 
-        // --- TTS (Kokoro o Piper, in base a settings.selected_tts_model) ---
+        // --- TTS (Kokoro/Piper/Chatterbox, da settings.selected_tts_model) ---
         if load_tts {
-            let (helper, model_file, model_id) = self.resolve_tts();
+            let (helper, model_file, model_id, python) = self.resolve_tts();
             let mut inner = self.inner.lock().map_err(|_| "lock avvelenato".to_string())?;
             // Ricarica anche se gia' caricato MA con un modello diverso da
             // quello ora selezionato nei settings (l'utente l'ha cambiato).
@@ -162,6 +218,7 @@ impl CallModelManager {
                     &helper,
                     Some(self.tts_model_dir.as_path()),
                     model_file.as_deref(),
+                    python.as_deref(),
                 )
                 .map_err(|e| format!("TTS load fallito: {e}"))?;
                 inner.tts = Some(Arc::new(Mutex::new(engine)));
@@ -287,41 +344,54 @@ pub fn spawn_idle_unloader(manager: Arc<CallModelManager>) {
 /// - Piper: la voce E' il modello — si elencano le voci Piper SCARICATE
 ///   (voice = model id); per cambiarla si imposta selected_tts_model e si
 ///   rifa' /models/load (l'engine viene ricaricato). Il campo "voice" di
-///   /tts/stream viene ignorato dall'helper Piper.
+///   /tts/stream viene ignorato dall'helper Piper;
+/// - Chatterbox: le voci sono i campioni CLONATI (POST /voices/clone); il
+///   campo "voice" di /tts/stream seleziona il campione per-richiesta.
 pub async fn models_available(State(state): State<Arc<ApiState>>) -> Json<Value> {
     let selected = state.call_models.selected_tts_model();
-    let is_piper = matches!(
-        state
-            .model_manager
-            .get_model_info(&selected)
-            .map(|i| i.engine_type),
-        Some(EngineType::Piper)
-    );
-    let voices: Vec<Value> = if is_piper {
-        state
-            .model_manager
-            .get_available_models()
-            .into_iter()
-            .filter(|m| matches!(m.engine_type, EngineType::Piper) && m.is_downloaded)
-            .map(|m| {
-                json!({
-                    "voice": m.id,
-                    "lang": m.supported_languages.first().cloned().unwrap_or_default(),
-                    "language": m.name,
+    let engine = state
+        .model_manager
+        .get_model_info(&selected)
+        .map(|i| i.engine_type);
+    let (engine_name, voices): (&str, Vec<Value>) = match engine {
+        Some(EngineType::Piper) => (
+            "piper",
+            state
+                .model_manager
+                .get_available_models()
+                .into_iter()
+                .filter(|m| matches!(m.engine_type, EngineType::Piper) && m.is_downloaded)
+                .map(|m| {
+                    json!({
+                        "voice": m.id,
+                        "lang": m.supported_languages.first().cloned().unwrap_or_default(),
+                        "language": m.name,
+                    })
                 })
-            })
-            .collect()
-    } else {
-        KOKORO_VOICES
-            .iter()
-            .map(|(voice, lang, lang_name)| {
-                json!({"voice": voice, "lang": lang, "language": lang_name})
-            })
-            .collect()
+                .collect(),
+        ),
+        Some(EngineType::Chatterbox) => (
+            "chatterbox",
+            state
+                .call_models
+                .cloned_voices()
+                .into_iter()
+                .map(|v| json!({"voice": v, "lang": "*", "language": "Voce clonata"}))
+                .collect(),
+        ),
+        _ => (
+            "kokoro",
+            KOKORO_VOICES
+                .iter()
+                .map(|(voice, lang, lang_name)| {
+                    json!({"voice": voice, "lang": lang, "language": lang_name})
+                })
+                .collect(),
+        ),
     };
     Json(json!({
         "tts": {
-            "engine": if is_piper { "piper" } else { "kokoro" },
+            "engine": engine_name,
             "voices": voices,
             "selected_model": selected,
         },
@@ -330,6 +400,53 @@ pub async fn models_available(State(state): State<Arc<ApiState>>) -> Json<Value>
             "current_model": state.transcription_manager.get_current_model(),
         },
     }))
+}
+
+/// `POST /voices/clone` — salva un campione voce per il cloning Chatterbox.
+/// Body: `{"name": "<slug>", "audio_b64": "<base64>", "format": "wav"?}`.
+/// 5-15 secondi di parlato pulito bastano. La voce diventa selezionabile come
+/// campo "voice" di /tts/stream (con l'engine Chatterbox attivo).
+pub async fn voices_clone(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    use base64::Engine as _;
+
+    let name = body.get("name").and_then(Value::as_str).unwrap_or("").trim();
+    let safe: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if safe.is_empty() {
+        return Json(json!({"status": "error",
+                           "message": "campo 'name' mancante o non valido"}));
+    }
+    let b64 = body.get("audio_b64").and_then(Value::as_str).unwrap_or("");
+    let bytes = match base64::engine::general_purpose::STANDARD.decode(b64) {
+        Ok(b) if !b.is_empty() => b,
+        _ => {
+            return Json(json!({"status": "error",
+                               "message": "campo 'audio_b64' mancante o non decodificabile"}));
+        }
+    };
+    let ext = match body.get("format").and_then(Value::as_str).unwrap_or("wav") {
+        f @ ("wav" | "mp3" | "flac" | "ogg") => f,
+        other => {
+            return Json(json!({"status": "error",
+                               "message": format!("formato non supportato: {other}")}));
+        }
+    };
+    let dir = state.call_models.cloned_voices_dir();
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return Json(json!({"status": "error", "message": format!("mkdir fallita: {e}")}));
+    }
+    let path = dir.join(format!("{safe}.{ext}"));
+    if let Err(e) = std::fs::write(&path, &bytes) {
+        return Json(json!({"status": "error", "message": format!("scrittura fallita: {e}")}));
+    }
+    info!("Voce clonata salvata: {} ({} byte)", path.display(), bytes.len());
+    Json(json!({"status": "ok", "voice": safe,
+                "voices": state.call_models.cloned_voices()}))
 }
 
 /// `POST /models/load` — carica i modelli in VRAM.

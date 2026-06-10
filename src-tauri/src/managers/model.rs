@@ -33,6 +33,11 @@ pub enum EngineType {
     /// Piper: motore TTS leggero ONNX (rhasspy). Ogni voce e' un `.onnx` +
     /// il companion `.onnx.json`. Multi-lingua.
     Piper,
+    /// Chatterbox Multilingual (Resemble AI, MIT): TTS con voice cloning
+    /// zero-shot. I pesi vivono nella cache HuggingFace (scaricati
+    /// dall'helper al primo avvio); `filename` e' un file marcatore creato
+    /// dal setup del venv dedicato.
+    Chatterbox,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -766,6 +771,44 @@ impl ModelManager {
                 },
             );
         }
+
+        // ----------------------------------------------------------------
+        // Chatterbox Multilingual (Resemble AI, MIT): TTS con voice cloning
+        // zero-shot da un campione di pochi secondi (POST /voices/clone).
+        // Gira su GPU nel venv dedicato 'chatterbox-venv'; i pesi (~3 GB) li
+        // scarica l'helper da HuggingFace al primo avvio. Il marcatore
+        // `.ready` viene creato dal setup del venv.
+        // ----------------------------------------------------------------
+        available_models.insert(
+            "chatterbox-multilingual".to_string(),
+            ModelInfo {
+                id: "chatterbox-multilingual".to_string(),
+                name: "Chatterbox (voice cloning)".to_string(),
+                description: "TTS multilingue con clonazione vocale zero-shot \
+                              da un campione di pochi secondi (GPU). Le voci \
+                              clonate si caricano via POST /voices/clone."
+                    .to_string(),
+                filename: "chatterbox-multilingual.ready".to_string(),
+                url: None,
+                sha256: None,
+                size_mb: 3000,
+                is_downloaded: false,
+                is_downloading: false,
+                partial_size: 0,
+                is_directory: false,
+                engine_type: EngineType::Chatterbox,
+                accuracy_score: 0.95,
+                speed_score: 0.6,
+                supports_translation: false,
+                is_recommended: false,
+                supported_languages: ["it", "en", "fr", "de", "es", "pt"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                supports_language_selection: false,
+                is_custom: false,
+            },
+        );
 
         // Auto-discover custom Whisper models (.bin files) in the models directory
         if let Err(e) = Self::discover_custom_whisper_models(&models_dir, &mut available_models) {

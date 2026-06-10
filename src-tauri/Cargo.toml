@@ -29,6 +29,7 @@ serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 
 [dependencies]
+base64 = "0.22"        # decodifica dei campioni voce (POST /voices/clone)
 once_cell = "1"
 tauri = { version = "2.10.2", features = [
   "protocol-asset",
