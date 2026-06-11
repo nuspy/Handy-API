@@ -53,9 +53,10 @@ pub const KOKORO_VOICES: &[(&str, &str, &str)] = &[
 const IDLE_UNLOAD: Duration = Duration::from_secs(15 * 60);
 
 /// Watchdog del warm-up al load dell'engine: Chatterbox carica il modello al
-/// primo turno (from_pretrained, anche minuti col primo download HF), molto
-/// oltre il SYNTH_TIMEOUT da streaming (60s).
-const WARMUP_TIMEOUT: Duration = Duration::from_secs(240);
+/// primo turno (from_pretrained: misurati ~3-4 minuti su questa macchina coi
+/// pesi gia' in cache HF) + la sintesi della frase di prova. Molto oltre il
+/// SYNTH_TIMEOUT da streaming (60s).
+const WARMUP_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Watchdog delle sintesi one-shot di /tts/test: testo libero + eventuale
 /// preparazione dei conditionals di una voce clonata.
