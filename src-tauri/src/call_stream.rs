@@ -285,7 +285,15 @@ async fn handle_tts_socket(mut socket: WebSocket, state: Arc<ApiState>) {
     state.call_models.touch();
 
     // Parametri di sintesi, sovrascrivibili dal messaggio "config".
-    let mut voice = "if_sara".to_string();
+    // Default: la voce preferita dei settings (es. voce clonata), se impostata.
+    let mut voice = {
+        let preferred = state.call_models.selected_tts_voice();
+        if preferred.is_empty() {
+            "if_sara".to_string()
+        } else {
+            preferred
+        }
+    };
     let mut lang = "it".to_string();
     let mut speed = 1.0f32;
     // Testo ricevuto da Hermes ma non ancora sintetizzato.

@@ -14,7 +14,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use axum::{extract::State, Json};
+use axum::{
+    extract::{Path as AxumPath, State},
+    http::StatusCode,
+    Json,
+};
 use log::{error, info};
 use serde_json::{json, Value};
 
@@ -93,6 +97,11 @@ impl CallModelManager {
     /// Id del modello TTS scelto nei settings (Settings -> Models -> TTS).
     pub fn selected_tts_model(&self) -> String {
         crate::settings::get_settings(&self.app_handle).selected_tts_model
+    }
+
+    /// Voce TTS preferita nei settings ("" = default dell'engine).
+    pub fn selected_tts_voice(&self) -> String {
+        crate::settings::get_settings(&self.app_handle).selected_tts_voice
     }
 
     /// Percorso di un helper che vive accanto a quello Kokoro.
@@ -198,34 +207,42 @@ impl CallModelManager {
 
         // --- TTS (Kokoro/Piper/Chatterbox, da settings.selected_tts_model) ---
         if load_tts {
-            let (helper, model_file, model_id, python) = self.resolve_tts();
-            let mut inner = self.inner.lock().map_err(|_| "lock avvelenato".to_string())?;
-            // Ricarica anche se gia' caricato MA con un modello diverso da
-            // quello ora selezionato nei settings (l'utente l'ha cambiato).
-            let needs_load = inner.tts.is_none()
-                || inner.tts_model.as_deref() != Some(model_id.as_str());
-            if needs_load {
-                if inner.tts.is_some() {
-                    info!(
-                        "TTS: modello cambiato ({} -> {}), ricarico l'engine",
-                        inner.tts_model.as_deref().unwrap_or("?"),
-                        model_id
-                    );
-                }
-                inner.tts = None; // drop del vecchio engine -> termina l'helper
-                inner.tts_model = None;
-                let engine = KokoroTts::start(
-                    &helper,
-                    Some(self.tts_model_dir.as_path()),
-                    model_file.as_deref(),
-                    python.as_deref(),
-                )
-                .map_err(|e| format!("TTS load fallito: {e}"))?;
-                inner.tts = Some(Arc::new(Mutex::new(engine)));
-                inner.tts_model = Some(model_id);
-            }
-            inner.last_used = Instant::now();
+            self.ensure_tts()?;
         }
+        Ok(())
+    }
+
+    /// Carica il SOLO engine TTS se non e' gia' in VRAM col modello selezionato
+    /// nei settings. Non tocca l'STT (usato da `/tts/test` oltre che da `load`).
+    /// **Bloccante**: usare da `spawn_blocking`.
+    pub fn ensure_tts(&self) -> Result<(), String> {
+        let (helper, model_file, model_id, python) = self.resolve_tts();
+        let mut inner = self.inner.lock().map_err(|_| "lock avvelenato".to_string())?;
+        // Ricarica anche se gia' caricato MA con un modello diverso da
+        // quello ora selezionato nei settings (l'utente l'ha cambiato).
+        let needs_load = inner.tts.is_none()
+            || inner.tts_model.as_deref() != Some(model_id.as_str());
+        if needs_load {
+            if inner.tts.is_some() {
+                info!(
+                    "TTS: modello cambiato ({} -> {}), ricarico l'engine",
+                    inner.tts_model.as_deref().unwrap_or("?"),
+                    model_id
+                );
+            }
+            inner.tts = None; // drop del vecchio engine -> termina l'helper
+            inner.tts_model = None;
+            let engine = KokoroTts::start(
+                &helper,
+                Some(self.tts_model_dir.as_path()),
+                model_file.as_deref(),
+                python.as_deref(),
+            )
+            .map_err(|e| format!("TTS load fallito: {e}"))?;
+            inner.tts = Some(Arc::new(Mutex::new(engine)));
+            inner.tts_model = Some(model_id);
+        }
+        inner.last_used = Instant::now();
         Ok(())
     }
 
@@ -494,4 +511,226 @@ pub async fn models_unload(
 /// `GET /models/status` — cosa e' caricato e da quanto e' inattivo.
 pub async fn models_status(State(state): State<Arc<ApiState>>) -> Json<Value> {
     Json(state.call_models.status())
+}
+
+/// `GET /voices/cloned` — elenco delle voci clonate con i metadata dei file.
+/// A differenza di `/models/available` funziona a prescindere dall'engine
+/// TTS attivo (la GUI gestisce le voci anche con Kokoro/Piper selezionato).
+pub async fn voices_list(State(state): State<Arc<ApiState>>) -> Json<Value> {
+    let dir = state.call_models.cloned_voices_dir();
+    let mut voices: Vec<Value> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            let ext = p
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("")
+                .to_string();
+            if !p.is_file() || !matches!(ext.as_str(), "wav" | "mp3" | "flac" | "ogg") {
+                continue;
+            }
+            let name = match p.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            let meta = e.metadata().ok();
+            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let modified = meta
+                .and_then(|m| m.modified().ok())
+                .map(|t| chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339())
+                .unwrap_or_default();
+            voices.push(json!({
+                "name": name,
+                "format": ext,
+                "size_bytes": size,
+                "modified": modified,
+            }));
+        }
+    }
+    voices.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    Json(json!({"voices": voices}))
+}
+
+/// `DELETE /voices/cloned/:name` — elimina un campione voce clonata.
+/// Il nome viene sanificato con lo stesso filtro di `/voices/clone`.
+pub async fn voices_delete(
+    State(state): State<Arc<ApiState>>,
+    AxumPath(name): AxumPath<String>,
+) -> (StatusCode, Json<Value>) {
+    let safe: String = name
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    if safe.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"status": "error", "message": "nome voce non valido"})),
+        );
+    }
+    let dir = state.call_models.cloned_voices_dir();
+    let mut removed = false;
+    for ext in ["wav", "mp3", "flac", "ogg"] {
+        let path = dir.join(format!("{safe}.{ext}"));
+        if path.is_file() && std::fs::remove_file(&path).is_ok() {
+            info!("Voce clonata eliminata: {}", path.display());
+            removed = true;
+        }
+    }
+    if removed {
+        (
+            StatusCode::OK,
+            Json(json!({"status": "ok", "voices": state.call_models.cloned_voices()})),
+        )
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({"status": "error",
+                        "message": format!("voce '{safe}' non trovata")})),
+        )
+    }
+}
+
+/// `POST /tts/test` — sintesi one-shot per provare una voce (anteprima GUI).
+/// Body: `{"text", "voice"?, "lang"?, "speed"?}`. Se `voice` manca usa la
+/// preferita dei settings (`selected_tts_voice`). Carica il solo engine TTS
+/// se non e' gia' in VRAM.
+/// Risposta: `{"status":"ok","audio_b64":"<wav>","sample_rate":N,"duration_ms":N}`.
+pub async fn tts_test(
+    State(state): State<Arc<ApiState>>,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    let text = body
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if text.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"status": "error", "message": "campo 'text' mancante"})),
+        );
+    }
+    let voice = body
+        .get("voice")
+        .and_then(Value::as_str)
+        .filter(|v| !v.is_empty())
+        .map(String::from)
+        .unwrap_or_else(|| {
+            let preferred = state.call_models.selected_tts_voice();
+            if preferred.is_empty() {
+                "if_sara".to_string()
+            } else {
+                preferred
+            }
+        });
+    let lang = body
+        .get("lang")
+        .and_then(Value::as_str)
+        .unwrap_or("it")
+        .to_string();
+    let speed = body.get("speed").and_then(Value::as_f64).unwrap_or(1.0) as f32;
+
+    // Se l'helper e' morto (watchdog/crash) scartalo, cosi' lo ricarichiamo.
+    state.call_models.reap_dead_tts();
+    let manager = state.call_models.clone();
+    match tokio::task::spawn_blocking(move || manager.ensure_tts()).await {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"status": "error", "message": e})),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status": "error", "message": format!("task panicked: {e}")})),
+            );
+        }
+    }
+    let engine = match state.call_models.tts_engine() {
+        Some(e) => e,
+        None => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(json!({"status": "error", "message": "engine TTS non caricato"})),
+            );
+        }
+    };
+    state.call_models.touch();
+
+    let voice_used = voice.clone();
+    let synth = tokio::task::spawn_blocking(move || {
+        let mut eng = engine
+            .lock()
+            .map_err(|_| "lock dell'engine avvelenato".to_string())?;
+        eng.synthesize(&text, &voice, &lang, speed)
+            .map_err(|e| e.to_string())
+    })
+    .await;
+    let audio = match synth {
+        Ok(Ok(a)) => a,
+        Ok(Err(e)) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status": "error", "message": e})),
+            );
+        }
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status": "error", "message": format!("task panicked: {e}")})),
+            );
+        }
+    };
+
+    // PCM f32 -> WAV 16 bit mono in memoria.
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: audio.sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    {
+        let mut writer = match hound::WavWriter::new(&mut cursor, spec) {
+            Ok(w) => w,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"status": "error",
+                                "message": format!("encoding WAV fallito: {e}")})),
+                );
+            }
+        };
+        for s in &audio.samples {
+            let v = (s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+            if writer.write_sample(v).is_err() {
+                break;
+            }
+        }
+        if let Err(e) = writer.finalize() {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"status": "error",
+                            "message": format!("finalizzazione WAV fallita: {e}")})),
+            );
+        }
+    }
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(cursor.into_inner());
+    let duration_ms =
+        audio.samples.len() as u64 * 1000 / u64::from(audio.sample_rate.max(1));
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "ok",
+            "audio_b64": b64,
+            "sample_rate": audio.sample_rate,
+            "duration_ms": duration_ms,
+            "voice": voice_used,
+        })),
+    )
 }

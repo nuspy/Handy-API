@@ -2534,6 +2534,7 @@ dependencies = [
  "tauri-specta",
  "tempfile",
  "tokio",
+ "tower-http",
  "transcribe-rs",
  "vad-rs",
  "windows 0.61.3",

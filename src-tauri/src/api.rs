@@ -2,9 +2,10 @@ use axum::{
     extract::{Multipart, State},
     http::StatusCode,
     response::{IntoResponse, Json},
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
+use tower_http::cors::CorsLayer;
 use log::{debug, error, info, warn};
 use serde::Serialize;
 use std::io::Write;
@@ -453,6 +454,17 @@ pub fn start_api_server(
         )
         // Voice cloning (engine Chatterbox): carica un campione voce.
         .route("/voices/clone", post(crate::model_control::voices_clone))
+        // Gestione voci clonate dalla GUI: elenco con metadata + cancellazione.
+        .route("/voices/cloned", get(crate::model_control::voices_list))
+        .route(
+            "/voices/cloned/:name",
+            delete(crate::model_control::voices_delete),
+        )
+        // Sintesi one-shot per provare una voce (anteprima nelle GUI).
+        .route("/tts/test", post(crate::model_control::tts_test))
+        // CORS permissivo: i webview Tauri (Handy stesso e il Control Center
+        // di callAPIcall) chiamano queste API con fetch dal browser context.
+        .layer(CorsLayer::permissive())
         .with_state(state);
 
     tauri::async_runtime::spawn(async move {

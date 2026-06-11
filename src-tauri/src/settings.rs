@@ -434,6 +434,11 @@ pub struct AppSettings {
     /// Usato dal canale di controllo per scegliere quale engine/file caricare.
     #[serde(default = "default_selected_tts_model")]
     pub selected_tts_model: String,
+    /// Voce TTS preferita ("" = default dell'engine). Per Chatterbox e' il nome
+    /// di una voce clonata; usata come fallback quando /tts/stream o /tts/test
+    /// non specificano "voice".
+    #[serde(default)]
+    pub selected_tts_voice: String,
 }
 
 fn default_selected_tts_model() -> String {
@@ -823,6 +828,7 @@ pub fn get_default_settings() -> AppSettings {
         whisper_gpu_device: default_whisper_gpu_device(),
         extra_recording_buffer_ms: 0,
         selected_tts_model: default_selected_tts_model(),
+        selected_tts_voice: String::new(),
     }
 }
 
