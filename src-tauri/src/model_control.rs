@@ -155,14 +155,24 @@ impl CallModelManager {
         out
     }
 
+    /// Id del modello Chatterbox SCARICATO, se presente (serve a /tts/test
+    /// per provare le voci clonate anche quando l'engine attivo e' un altro).
+    pub fn chatterbox_model_id(&self) -> Option<String> {
+        self.model_manager
+            .get_available_models()
+            .into_iter()
+            .find(|m| matches!(m.engine_type, EngineType::Chatterbox) && m.is_downloaded)
+            .map(|m| m.id)
+    }
+
     /// Risolve il modello TTS attivo (dai settings) in
     /// (helper_path, model_file, model_id, python_override). Gli helper
     /// condividono lo stesso protocollo stdio: cambia lo script, l'eventuale
     /// file modello e (per Chatterbox) l'interprete del venv dedicato.
     /// Se il modello non e' noto, ritorna l'helper Kokoro senza file
     /// specifico (l'helper sceglie da solo).
-    fn resolve_tts(&self) -> (PathBuf, Option<String>, String, Option<PathBuf>) {
-        let sel = self.selected_tts_model();
+    fn resolve_tts_id(&self, sel: &str) -> (PathBuf, Option<String>, String, Option<PathBuf>) {
+        let sel = sel.to_string();
         match self.model_manager.get_model_info(&sel) {
             Some(info) if matches!(info.engine_type, EngineType::Piper) => (
                 self.helper_sibling("piper_tts_helper.py"),
@@ -216,7 +226,18 @@ impl CallModelManager {
     /// nei settings. Non tocca l'STT (usato da `/tts/test` oltre che da `load`).
     /// **Bloccante**: usare da `spawn_blocking`.
     pub fn ensure_tts(&self) -> Result<(), String> {
-        let (helper, model_file, model_id, python) = self.resolve_tts();
+        self.ensure_tts_model(None)
+    }
+
+    /// Come `ensure_tts`, ma con un modello esplicito al posto di quello dei
+    /// settings: /tts/test la usa per provare le voci clonate (engine
+    /// Chatterbox) senza cambiare la selezione dell'utente. Il prossimo
+    /// /models/load ricarica l'engine selezionato.
+    pub fn ensure_tts_model(&self, model_id_override: Option<&str>) -> Result<(), String> {
+        let sel = model_id_override
+            .map(String::from)
+            .unwrap_or_else(|| self.selected_tts_model());
+        let (helper, model_file, model_id, python) = self.resolve_tts_id(&sel);
         let mut inner = self.inner.lock().map_err(|_| "lock avvelenato".to_string())?;
         // Ricarica anche se gia' caricato MA con un modello diverso da
         // quello ora selezionato nei settings (l'utente l'ha cambiato).
@@ -632,10 +653,38 @@ pub async fn tts_test(
         .to_string();
     let speed = body.get("speed").and_then(Value::as_f64).unwrap_or(1.0) as f32;
 
+    // Voce clonata? Serve l'engine Chatterbox, a prescindere dal modello
+    // selezionato nei settings (es. Kokoro attivo): altrimenti l'helper
+    // attivo non conosce la voce e la sintesi fallisce.
+    let is_cloned = state
+        .call_models
+        .cloned_voices()
+        .iter()
+        .any(|v| v == &voice);
+    let model_override = if is_cloned {
+        match state.call_models.chatterbox_model_id() {
+            Some(id) => Some(id),
+            None => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(json!({"status": "error",
+                                "message": "voce clonata ma il modello Chatterbox non \
+                                            e' scaricato (Settings -> Models -> TTS)"})),
+                );
+            }
+        }
+    } else {
+        None
+    };
+
     // Se l'helper e' morto (watchdog/crash) scartalo, cosi' lo ricarichiamo.
     state.call_models.reap_dead_tts();
     let manager = state.call_models.clone();
-    match tokio::task::spawn_blocking(move || manager.ensure_tts()).await {
+    match tokio::task::spawn_blocking(move || {
+        manager.ensure_tts_model(model_override.as_deref())
+    })
+    .await
+    {
         Ok(Ok(())) => {}
         Ok(Err(e)) => {
             return (
