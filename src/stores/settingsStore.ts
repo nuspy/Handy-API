@@ -157,6 +157,8 @@ const settingUpdaters: {
     commands.changeExtraRecordingBufferSetting(value as number),
   selected_tts_model: (value) =>
     commands.changeSelectedTtsModelSetting(value as string),
+  selected_tts_voice: (value) =>
+    commands.changeSelectedTtsVoiceSetting(value as string),
 };
 
 export const useSettingsStore = create<SettingsStore>()(

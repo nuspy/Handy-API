@@ -545,6 +545,17 @@ pub fn change_selected_tts_model_setting(app: AppHandle, model_id: String) -> Re
     Ok(())
 }
 
+/// Imposta la voce TTS preferita ("" = default dell'engine). Per Chatterbox e'
+/// il nome di una voce clonata; usata come fallback da /tts/stream e /tts/test.
+#[tauri::command]
+#[specta::specta]
+pub fn change_selected_tts_voice_setting(app: AppHandle, voice: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.selected_tts_voice = voice;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn change_overlay_position_setting(app: AppHandle, position: String) -> Result<(), String> {

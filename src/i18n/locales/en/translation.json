@@ -11,6 +11,7 @@
   "sidebar": {
     "general": "General",
     "models": "Models",
+    "voices": "Voices",
     "advanced": "Advanced",
     "postProcessing": "Post Process",
     "history": "History",
@@ -536,6 +537,47 @@
           "description": "High-performance inference of OpenAI's Whisper automatic speech recognition model",
           "details": "Handy uses Whisper.cpp for fast, local speech-to-text processing. Thanks to the amazing work by Georgi Gerganov and contributors."
         }
+      }
+    },
+    "voices": {
+      "title": "Voices",
+      "description": "Manage cloned voices for the Chatterbox zero-shot voice cloning engine. Record or upload 5-15 seconds of clean speech, preview the result, and pick the voice used for synthesis.",
+      "apiError": "Handy API unreachable: is the API server running?",
+      "chatterboxMissing": "The Chatterbox TTS model is not downloaded. Cloned voices can be managed here, but synthesis requires downloading Chatterbox from the Models section.",
+      "sampleTextLabel": "Preview text",
+      "sampleTextDefault": "Hello! This is a preview of my cloned voice.",
+      "listTitle": "Your cloned voices",
+      "empty": "No cloned voices yet. Create one above.",
+      "create": {
+        "title": "New voice",
+        "namePlaceholder": "Voice name (letters, numbers, - and _)",
+        "nameInvalid": "Use only letters, numbers, dashes and underscores.",
+        "failed": "Saving the voice failed.",
+        "saving": "Saving voice...",
+        "tabRecord": "Record",
+        "tabUpload": "Upload file"
+      },
+      "recorder": {
+        "start": "Start recording",
+        "stop": "Stop",
+        "hint": "Speak naturally for {{min}}-{{max}} seconds in a quiet room.",
+        "tooShort": "Recording too short: at least {{min}} seconds are required.",
+        "waitMin": "Keep speaking: at least {{min}} seconds are required.",
+        "micError": "Microphone access failed."
+      },
+      "upload": {
+        "choose": "Choose audio file",
+        "hint": "WAV, MP3, FLAC or OGG with 5-15 seconds of clean speech (max 25 MB).",
+        "badFormat": "Unsupported format: use WAV, MP3, FLAC or OGG.",
+        "tooBig": "File too large (max 25 MB)."
+      },
+      "card": {
+        "active": "active",
+        "setActive": "Set active",
+        "unsetActive": "Unset",
+        "deleteTitle": "Delete voice",
+        "deleteConfirm": "Delete the cloned voice \"{{name}}\"? This cannot be undone.",
+        "previewError": "Preview synthesis failed."
       }
     }
   },

@@ -11,6 +11,7 @@
   "sidebar": {
     "general": "Generale",
     "models": "Modelli",
+    "voices": "Voci",
     "advanced": "Avanzate",
     "postProcessing": "Post-Elaborazione",
     "history": "Cronologia",
@@ -536,6 +537,47 @@
           "description": "Inferenza ad alte prestazioni del modello di riconoscimento vocale automatico Whisper di OpenAI",
           "details": "Handy usa Whisper.cpp per il riconoscimento vocale veloce in locale. Grazie a Georgi Gerganov e collaboratori per il fantastico lavoro."
         }
+      }
+    },
+    "voices": {
+      "title": "Voci",
+      "description": "Gestisci le voci clonate per l'engine di voice cloning zero-shot Chatterbox. Registra o carica 5-15 secondi di parlato pulito, ascolta l'anteprima e scegli la voce usata per la sintesi.",
+      "apiError": "API di Handy non raggiungibile: il server API è attivo?",
+      "chatterboxMissing": "Il modello TTS Chatterbox non è scaricato. Da qui puoi gestire le voci clonate, ma per la sintesi serve scaricare Chatterbox dalla sezione Modelli.",
+      "sampleTextLabel": "Testo di prova",
+      "sampleTextDefault": "Ciao! Questa è un'anteprima della mia voce clonata.",
+      "listTitle": "Le tue voci clonate",
+      "empty": "Nessuna voce clonata. Creane una qui sopra.",
+      "create": {
+        "title": "Nuova voce",
+        "namePlaceholder": "Nome voce (lettere, numeri, - e _)",
+        "nameInvalid": "Usa solo lettere, numeri, trattini e underscore.",
+        "failed": "Salvataggio della voce fallito.",
+        "saving": "Salvataggio in corso...",
+        "tabRecord": "Registra",
+        "tabUpload": "Carica file"
+      },
+      "recorder": {
+        "start": "Avvia registrazione",
+        "stop": "Stop",
+        "hint": "Parla in modo naturale per {{min}}-{{max}} secondi in un ambiente silenzioso.",
+        "tooShort": "Registrazione troppo corta: servono almeno {{min}} secondi.",
+        "waitMin": "Continua a parlare: servono almeno {{min}} secondi.",
+        "micError": "Accesso al microfono fallito."
+      },
+      "upload": {
+        "choose": "Scegli file audio",
+        "hint": "WAV, MP3, FLAC o OGG con 5-15 secondi di parlato pulito (max 25 MB).",
+        "badFormat": "Formato non supportato: usa WAV, MP3, FLAC o OGG.",
+        "tooBig": "File troppo grande (max 25 MB)."
+      },
+      "card": {
+        "active": "attiva",
+        "setActive": "Imposta attiva",
+        "unsetActive": "Disattiva",
+        "deleteTitle": "Elimina voce",
+        "deleteConfirm": "Eliminare la voce clonata \"{{name}}\"? L'operazione non è reversibile.",
+        "previewError": "Sintesi dell'anteprima fallita."
       }
     }
   },
