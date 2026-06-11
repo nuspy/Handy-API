@@ -281,8 +281,16 @@ impl CallModelManager {
             // Chatterbox: voce builtin (""). Kokoro: serve una voce valida.
             // Piper: ignora il campo voice.
             let warm_voice = if is_chatterbox { "" } else { "if_sara" };
+            // NB: frase di lunghezza normale — Chatterbox va in errore
+            // tensoriale sui testi cortissimi ("Ok." -> reduction dim vuota).
             engine
-                .synthesize_with_timeout("Ok.", warm_voice, "it", 1.0, WARMUP_TIMEOUT)
+                .synthesize_with_timeout(
+                    "Questo e' il riscaldamento del motore di sintesi vocale.",
+                    warm_voice,
+                    "it",
+                    1.0,
+                    WARMUP_TIMEOUT,
+                )
                 .map_err(|e| format!("warm-up TTS fallito: {e}"))?;
             info!("TTS: engine {} pronto (warm-up ok)", model_id);
             inner.tts = Some(Arc::new(Mutex::new(engine)));
