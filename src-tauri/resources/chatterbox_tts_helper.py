@@ -46,6 +46,14 @@ def cloned_dir() -> str:
 
 
 def main() -> int:
+    # PRIMA di importare qualsiasi cosa: cattura lo stdout BINARIO del
+    # protocollo e dirotta sys.stdout su stderr. Le librerie di Chatterbox
+    # fanno print() su stdout (perth: "Loaded PerTh Watermarker...") e una
+    # sola riga di testo corromperebbe l'header binario letto da tts.rs
+    # (count/sr diventano byte ASCII -> lettura di GB inesistenti -> watchdog).
+    stdout = sys.stdout.buffer
+    sys.stdout = sys.stderr
+
     try:
         import torch
         from chatterbox.mtl_tts import ChatterboxMultilingualTTS
@@ -65,7 +73,6 @@ def main() -> int:
     sample_rate = int(model.sr)
     log(f"pronto (sr={sample_rate})")
 
-    stdout = sys.stdout.buffer
     # Cache dei conditionals per voce: nome -> True (gia' preparati nel modello).
     # Il modello tiene UN set di conditionals alla volta: si rigenerano solo
     # quando cambia la voce richiesta.
