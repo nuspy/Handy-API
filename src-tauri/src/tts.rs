@@ -128,6 +128,20 @@ impl KokoroTts {
         lang: &str,
         speed: f32,
     ) -> Result<TtsAudio> {
+        self.synthesize_with_timeout(text, voice, lang, speed, SYNTH_TIMEOUT)
+    }
+
+    /// Come [`Self::synthesize`] ma con un watchdog esplicito: il warm-up al
+    /// load (Chatterbox carica il modello al primo turno, anche minuti) e
+    /// /tts/test usano timeout piu' generosi del default da streaming.
+    pub fn synthesize_with_timeout(
+        &mut self,
+        text: &str,
+        voice: &str,
+        lang: &str,
+        speed: f32,
+        timeout: Duration,
+    ) -> Result<TtsAudio> {
         // Watchdog: parte PRIMA della write (anche la write puo' bloccare se
         // l'helper non legge piu' e la pipe e' piena).
         let cancel = Arc::new(AtomicBool::new(false));
@@ -138,7 +152,7 @@ impl KokoroTts {
             std::thread::Builder::new()
                 .name("tts-watchdog".to_string())
                 .spawn(move || {
-                    let deadline = Instant::now() + SYNTH_TIMEOUT;
+                    let deadline = Instant::now() + timeout;
                     while Instant::now() < deadline {
                         if cancel.load(Ordering::Relaxed) {
                             return;
@@ -148,7 +162,7 @@ impl KokoroTts {
                     if !cancel.load(Ordering::Relaxed) {
                         error!(
                             "KokoroTts: helper bloccato oltre {}s, lo termino",
-                            SYNTH_TIMEOUT.as_secs()
+                            timeout.as_secs()
                         );
                         if let Ok(mut c) = child.lock() {
                             let _ = c.kill();

@@ -52,6 +52,15 @@ pub const KOKORO_VOICES: &[(&str, &str, &str)] = &[
 /// Dopo quanta inattivita' un modello viene scaricato da solo.
 const IDLE_UNLOAD: Duration = Duration::from_secs(15 * 60);
 
+/// Watchdog del warm-up al load dell'engine: Chatterbox carica il modello al
+/// primo turno (from_pretrained, anche minuti col primo download HF), molto
+/// oltre il SYNTH_TIMEOUT da streaming (60s).
+const WARMUP_TIMEOUT: Duration = Duration::from_secs(240);
+
+/// Watchdog delle sintesi one-shot di /tts/test: testo libero + eventuale
+/// preparazione dei conditionals di una voce clonata.
+const TTS_TEST_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// Gestisce il caricamento/scaricamento dei modelli STT e TTS in VRAM.
 pub struct CallModelManager {
     transcription: Arc<TranscriptionManager>,
@@ -253,13 +262,29 @@ impl CallModelManager {
             }
             inner.tts = None; // drop del vecchio engine -> termina l'helper
             inner.tts_model = None;
-            let engine = KokoroTts::start(
+            let mut engine = KokoroTts::start(
                 &helper,
                 Some(self.tts_model_dir.as_path()),
                 model_file.as_deref(),
                 python.as_deref(),
             )
             .map_err(|e| format!("TTS load fallito: {e}"))?;
+            // Warm-up: una micro-sintesi forza il caricamento COMPLETO del
+            // modello dentro il load (timeout dedicato e generoso). Senza,
+            // la prima sintesi reale pagherebbe il load dell'helper e il
+            // watchdog da 60s la ucciderebbe (visto con Chatterbox: ~60-120s
+            // di from_pretrained al primo turno).
+            let is_chatterbox = helper
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map_or(false, |s| s.contains("chatterbox"));
+            // Chatterbox: voce builtin (""). Kokoro: serve una voce valida.
+            // Piper: ignora il campo voice.
+            let warm_voice = if is_chatterbox { "" } else { "if_sara" };
+            engine
+                .synthesize_with_timeout("Ok.", warm_voice, "it", 1.0, WARMUP_TIMEOUT)
+                .map_err(|e| format!("warm-up TTS fallito: {e}"))?;
+            info!("TTS: engine {} pronto (warm-up ok)", model_id);
             inner.tts = Some(Arc::new(Mutex::new(engine)));
             inner.tts_model = Some(model_id);
         }
@@ -715,7 +740,7 @@ pub async fn tts_test(
         let mut eng = engine
             .lock()
             .map_err(|_| "lock dell'engine avvelenato".to_string())?;
-        eng.synthesize(&text, &voice, &lang, speed)
+        eng.synthesize_with_timeout(&text, &voice, &lang, speed, TTS_TEST_TIMEOUT)
             .map_err(|e| e.to_string())
     })
     .await;
