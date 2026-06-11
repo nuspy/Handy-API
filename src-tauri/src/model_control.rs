@@ -236,14 +236,22 @@ impl CallModelManager {
     /// nei settings. Non tocca l'STT (usato da `/tts/test` oltre che da `load`).
     /// **Bloccante**: usare da `spawn_blocking`.
     pub fn ensure_tts(&self) -> Result<(), String> {
-        self.ensure_tts_model(None)
+        self.ensure_tts_model(None, None)
     }
 
     /// Come `ensure_tts`, ma con un modello esplicito al posto di quello dei
     /// settings: /tts/test la usa per provare le voci clonate (engine
     /// Chatterbox) senza cambiare la selezione dell'utente. Il prossimo
     /// /models/load ricarica l'engine selezionato.
-    pub fn ensure_tts_model(&self, model_id_override: Option<&str>) -> Result<(), String> {
+    ///
+    /// `warm_voice`: voce usata per la sintesi di warm-up (None = scelta
+    /// automatica). Per Chatterbox DEVE essere una voce clonata: la sintesi
+    /// con la voce builtin (senza riferimento) non funziona su questo helper.
+    pub fn ensure_tts_model(
+        &self,
+        model_id_override: Option<&str>,
+        warm_voice: Option<&str>,
+    ) -> Result<(), String> {
         let sel = model_id_override
             .map(String::from)
             .unwrap_or_else(|| self.selected_tts_model());
@@ -270,30 +278,44 @@ impl CallModelManager {
                 python.as_deref(),
             )
             .map_err(|e| format!("TTS load fallito: {e}"))?;
-            // Warm-up: una micro-sintesi forza il caricamento COMPLETO del
+            // Warm-up: una sintesi di prova forza il caricamento COMPLETO del
             // modello dentro il load (timeout dedicato e generoso). Senza,
             // la prima sintesi reale pagherebbe il load dell'helper e il
-            // watchdog da 60s la ucciderebbe (visto con Chatterbox: ~60-120s
-            // di from_pretrained al primo turno).
+            // watchdog da 60s la ucciderebbe (Chatterbox: ~3-4 min di
+            // from_pretrained su questa macchina).
             let is_chatterbox = helper
                 .file_name()
                 .and_then(|s| s.to_str())
                 .map_or(false, |s| s.contains("chatterbox"));
-            // Chatterbox: voce builtin (""). Kokoro: serve una voce valida.
-            // Piper: ignora il campo voice.
-            let warm_voice = if is_chatterbox { "" } else { "if_sara" };
-            // NB: frase di lunghezza normale — Chatterbox va in errore
-            // tensoriale sui testi cortissimi ("Ok." -> reduction dim vuota).
-            engine
-                .synthesize_with_timeout(
-                    "Questo e' il riscaldamento del motore di sintesi vocale.",
-                    warm_voice,
-                    "it",
-                    1.0,
-                    WARMUP_TIMEOUT,
-                )
-                .map_err(|e| format!("warm-up TTS fallito: {e}"))?;
-            info!("TTS: engine {} pronto (warm-up ok)", model_id);
+            // Voce del warm-up: per Chatterbox serve una voce CLONATA (la
+            // sintesi builtin senza riferimento non risponde/va in errore);
+            // se non ce ne sono si salta la sintesi (il load del modello e'
+            // comunque avvenuto). Kokoro: voce valida; Piper: campo ignorato.
+            let warm = match warm_voice {
+                Some(v) if !v.is_empty() => Some(v.to_string()),
+                _ if is_chatterbox => self.cloned_voices().into_iter().next(),
+                _ => Some("if_sara".to_string()),
+            };
+            match warm {
+                Some(voice) => {
+                    // NB: frase di lunghezza normale, niente monosillabi.
+                    engine
+                        .synthesize_with_timeout(
+                            "Questo e' il riscaldamento del motore di sintesi vocale.",
+                            &voice,
+                            "it",
+                            1.0,
+                            WARMUP_TIMEOUT,
+                        )
+                        .map_err(|e| format!("warm-up TTS fallito: {e}"))?;
+                    info!("TTS: engine {} pronto (warm-up con voce '{}')",
+                          model_id, voice);
+                }
+                None => {
+                    info!("TTS: engine {} avviato senza warm-up \
+                           (nessuna voce clonata disponibile)", model_id);
+                }
+            }
             inner.tts = Some(Arc::new(Mutex::new(engine)));
             inner.tts_model = Some(model_id);
         }
@@ -714,8 +736,13 @@ pub async fn tts_test(
     // Se l'helper e' morto (watchdog/crash) scartalo, cosi' lo ricarichiamo.
     state.call_models.reap_dead_tts();
     let manager = state.call_models.clone();
+    // Warm-up con la STESSA voce richiesta: oltre a caricare il modello
+    // prepara anche i conditionals della voce, cosi' la sintesi vera e'
+    // immediata.
+    let warm_voice_for_load = is_cloned.then(|| voice.clone());
     match tokio::task::spawn_blocking(move || {
-        manager.ensure_tts_model(model_override.as_deref())
+        manager.ensure_tts_model(model_override.as_deref(),
+                                 warm_voice_for_load.as_deref())
     })
     .await
     {
